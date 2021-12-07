@@ -24,10 +24,11 @@ ROOT::RVec<int> find_isolated_jets(Vec<float> eta1, Vec<float> phi1, Vec<float> 
     return mask;
 }
 
-
-void rdataframe_jitted() {
-    ROOT::EnableImplicitMT();
-    ROOT::RDataFrame df("Events", "root://eospublic.cern.ch//eos/root-eos/benchmark/Run2012B_SingleMu.root");
+double rdataframe_jitted(const char * f, int ncores) {
+    if ( ncores > 1 ) {
+        ROOT::EnableImplicitMT(ncores);
+    }
+    ROOT::RDataFrame df("Events", f);
     auto h = df.Filter("nJet > 0", "At least one jet")
                .Define("goodJet_ptcut", "Jet_pt > 30")
                .Define("goodJet_antiMuon", find_isolated_jets, {"Jet_eta", "Jet_phi", "Muon_pt", "Muon_eta", "Muon_phi"})
@@ -37,7 +38,5 @@ void rdataframe_jitted() {
                .Define("goodJet_sumPt", "Sum(Jet_pt[goodJet])")
                .Histo1D({"", ";Jet p_{T} sum (GeV);N_{Events}", 100, 15, 200}, "goodJet_sumPt");
 
-    TCanvas c;
-    h->Draw();
-    c.SaveAs("7_rdataframe_jitted.png");
+    return h->Integral();
 }

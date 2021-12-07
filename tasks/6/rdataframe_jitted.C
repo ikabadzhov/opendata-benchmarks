@@ -32,12 +32,14 @@ float trijet_pt(Vec<float> pt, Vec<float> eta, Vec<float> phi, Vec<float> mass, 
 }
 
 
-void rdataframe_jitted() {
+double rdataframe_jitted(const char * f, int ncores) {
+    if ( ncores > 1 ) {
+        ROOT::EnableImplicitMT(ncores);
+    }
     using ROOT::Math::PtEtaPhiMVector;
     using ROOT::VecOps::Construct;
 
-    ROOT::EnableImplicitMT();
-    ROOT::RDataFrame df("Events", "root://eospublic.cern.ch//eos/root-eos/benchmark/Run2012B_SingleMu.root");
+    ROOT::RDataFrame df("Events", f);
     auto df2 = df.Filter("nJet >= 3", "At least three jets")
                  .Define("JetXYZT", [](Vec<float> pt, Vec<float> eta, Vec<float> phi, Vec<float> m) {
                               return Construct<XYZTVector>(Construct<PtEtaPhiMVector>(pt, eta, phi, m));},
@@ -48,11 +50,5 @@ void rdataframe_jitted() {
     auto h2 = df2.Define("Trijet_leadingBtag", "Max(Take(Jet_btag, Trijet_idx))")
                  .Histo1D({"", ";Trijet leading b-tag;N_{Events}", 100, 0, 1}, "Trijet_leadingBtag");
 
-    TCanvas c;
-    c.Divide(2, 1);
-    c.cd(1);
-    h1->Draw();
-    c.cd(2);
-    h2->Draw();
-    c.SaveAs("6_rdataframe_jitted.png");
+    return h1->Integral() + h2->Integral();
 }

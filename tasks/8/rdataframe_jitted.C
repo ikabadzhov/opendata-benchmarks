@@ -41,10 +41,11 @@ unsigned int additional_lepton_idx(Vec<float> pt, Vec<float> eta, Vec<float> phi
     return lep_idx;
 }
 
-
-void rdataframe_jitted() {
-    ROOT::EnableImplicitMT();
-    ROOT::RDataFrame df("Events", "root://eospublic.cern.ch//eos/root-eos/benchmark/Run2012B_SingleMu.root");
+double rdataframe_jitted(const char * f, int ncores) {
+    if ( ncores > 1 ) {
+        ROOT::EnableImplicitMT(ncores);
+    }
+    ROOT::RDataFrame df("Events", f);
     auto h = df.Filter("nElectron + nMuon > 2", "At least three leptons")
                .Define("Lepton_pt", "Concatenate(Muon_pt, Electron_pt)")
                .Define("Lepton_eta", "Concatenate(Muon_eta, Electron_eta)")
@@ -59,7 +60,5 @@ void rdataframe_jitted() {
                        "sqrt(2.0 * Lepton_pt[AdditionalLepton_idx] * MET_pt * (1.0 - cos(ROOT::VecOps::DeltaPhi(MET_phi, Lepton_phi[AdditionalLepton_idx]))))")
                .Histo1D({"", ";Transverse mass (GeV);N_{Events}", 100, 0, 200}, "TransverseMass");
 
-    TCanvas c;
-    h->Draw();
-    c.SaveAs("8_rdataframe_jitted.png");
+    return h->Integral();
 }
