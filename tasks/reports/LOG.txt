@@ -1,0 +1,5 @@
+This is the log to confirm that all running times were as expected.
+
+[type=JIT/CMP]:: Q:[query #],  C:[# cores], T:[real time elapsed], F:[# files]
+
+
