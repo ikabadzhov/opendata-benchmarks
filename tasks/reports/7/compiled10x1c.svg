@@ -1,0 +1,1936 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="742" onload="init(evt)" viewBox="0 0 1200 742" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom();
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				clearzoom();
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x = txt.length - 2; x > 0; x--) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom() {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="742.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Flame Graph</text>
+<text id="details" x="10.00" y="725" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="725" > </text>
+<g id="frames">
+<g >
+<title>TAxis::FindBin@plt (8 samples, 0.01%)</title><rect x="1185.3" y="501" width="0.2" height="15.0" fill="rgb(222,50,25)" rx="2" ry="2" />
+<text  x="1188.33" y="511.5" ></text>
+</g>
+<g >
+<title>?? (13 samples, 0.02%)</title><rect x="1187.3" y="549" width="0.2" height="15.0" fill="rgb(205,180,32)" rx="2" ry="2" />
+<text  x="1190.32" y="559.5" ></text>
+</g>
+<g >
+<title>ROOT::RDataFrame::RDataFrame (7 samples, 0.01%)</title><rect x="1188.6" y="645" width="0.1" height="15.0" fill="rgb(254,78,41)" rx="2" ry="2" />
+<text  x="1191.60" y="655.5" ></text>
+</g>
+<g >
+<title>?? (30,669 samples, 42.75%)</title><rect x="214.2" y="421" width="504.5" height="15.0" fill="rgb(206,175,43)" rx="2" ry="2" />
+<text  x="217.23" y="431.5" >??</text>
+</g>
+<g >
+<title>__GI___libc_malloc (11 samples, 0.02%)</title><rect x="1181.4" y="453" width="0.2" height="15.0" fill="rgb(244,196,6)" rx="2" ry="2" />
+<text  x="1184.38" y="463.5" ></text>
+</g>
+<g >
+<title>ROOT::RDataFrame::RDataFrame (40 samples, 0.06%)</title><rect x="1187.8" y="501" width="0.6" height="15.0" fill="rgb(216,202,27)" rx="2" ry="2" />
+<text  x="1190.76" y="511.5" ></text>
+</g>
+<g >
+<title>frombuf (142 samples, 0.20%)</title><rect x="1150.9" y="373" width="2.4" height="15.0" fill="rgb(233,71,14)" rx="2" ry="2" />
+<text  x="1153.93" y="383.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::operator&gt;&lt;float, int&gt; (570 samples, 0.79%)</title><rect x="929.8" y="421" width="9.4" height="15.0" fill="rgb(230,215,39)" rx="2" ry="2" />
+<text  x="932.79" y="431.5" ></text>
+</g>
+<g >
+<title>TLeafI::ReadBasket (219 samples, 0.31%)</title><rect x="316.3" y="293" width="3.6" height="15.0" fill="rgb(226,152,0)" rx="2" ry="2" />
+<text  x="319.25" y="303.5" ></text>
+</g>
+<g >
+<title>ROOT::RDataFrame::RDataFrame (13 samples, 0.02%)</title><rect x="1187.3" y="597" width="0.2" height="15.0" fill="rgb(223,161,33)" rx="2" ry="2" />
+<text  x="1190.32" y="607.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::VecOps::RVecImpl&lt;float&gt;::operator= (321 samples, 0.45%)</title><rect x="1081.5" y="405" width="5.2" height="15.0" fill="rgb(227,175,37)" rx="2" ry="2" />
+<text  x="1084.45" y="415.5" ></text>
+</g>
+<g >
+<title>?? (13 samples, 0.02%)</title><rect x="1187.3" y="501" width="0.2" height="15.0" fill="rgb(242,228,39)" rx="2" ry="2" />
+<text  x="1190.32" y="511.5" ></text>
+</g>
+<g >
+<title>TBranch::ReadLeaves1Impl (104 samples, 0.14%)</title><rect x="670.4" y="373" width="1.7" height="15.0" fill="rgb(240,193,41)" rx="2" ry="2" />
+<text  x="673.44" y="383.5" ></text>
+</g>
+<g >
+<title>?? (171 samples, 0.24%)</title><rect x="1167.4" y="453" width="2.8" height="15.0" fill="rgb(253,206,25)" rx="2" ry="2" />
+<text  x="1170.37" y="463.5" ></text>
+</g>
+<g >
+<title>TChain::LoadTree (7 samples, 0.01%)</title><rect x="1188.4" y="565" width="0.1" height="15.0" fill="rgb(234,143,6)" rx="2" ry="2" />
+<text  x="1191.42" y="575.5" ></text>
+</g>
+<g >
+<title>TFileCacheRead::ReadBufferExtNormal (23 samples, 0.03%)</title><rect x="1148.2" y="325" width="0.4" height="15.0" fill="rgb(232,89,22)" rx="2" ry="2" />
+<text  x="1151.19" y="335.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::grow_pod (29 samples, 0.04%)</title><rect x="1086.7" y="437" width="0.5" height="15.0" fill="rgb(238,222,16)" rx="2" ry="2" />
+<text  x="1089.73" y="447.5" ></text>
+</g>
+<g >
+<title>_IO_new_popen (20 samples, 0.03%)</title><rect x="1187.9" y="389" width="0.3" height="15.0" fill="rgb(231,142,41)" rx="2" ry="2" />
+<text  x="1190.89" y="399.5" ></text>
+</g>
+<g >
+<title>__memcpy_avx_unaligned (15 samples, 0.02%)</title><rect x="1179.7" y="453" width="0.2" height="15.0" fill="rgb(240,110,21)" rx="2" ry="2" />
+<text  x="1182.69" y="463.5" ></text>
+</g>
+<g >
+<title>?? (13 samples, 0.02%)</title><rect x="1187.3" y="565" width="0.2" height="15.0" fill="rgb(228,71,25)" rx="2" ry="2" />
+<text  x="1190.32" y="575.5" ></text>
+</g>
+<g >
+<title>TBranch::GetBasketAndFirst (18,231 samples, 25.41%)</title><rect x="350.9" y="389" width="299.9" height="15.0" fill="rgb(246,164,13)" rx="2" ry="2" />
+<text  x="353.94" y="399.5" >TBranch::GetBasketAndFirst</text>
+</g>
+<g >
+<title>TBasket::ReadBasketBuffers (578 samples, 0.81%)</title><rect x="1139.3" y="373" width="9.5" height="15.0" fill="rgb(248,73,25)" rx="2" ry="2" />
+<text  x="1142.30" y="383.5" ></text>
+</g>
+<g >
+<title>inflate (539 samples, 0.75%)</title><rect x="1139.3" y="325" width="8.9" height="15.0" fill="rgb(238,64,2)" rx="2" ry="2" />
+<text  x="1142.30" y="335.5" ></text>
+</g>
+<g >
+<title>ldd (26 samples, 0.04%)</title><rect x="1188.7" y="677" width="0.5" height="15.0" fill="rgb(228,96,47)" rx="2" ry="2" />
+<text  x="1191.75" y="687.5" ></text>
+</g>
+<g >
+<title>[unknown] (7 samples, 0.01%)</title><rect x="619.0" y="181" width="0.1" height="15.0" fill="rgb(238,206,52)" rx="2" ry="2" />
+<text  x="622.03" y="191.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RLoopManager::GetBranchNames[abi:cxx11] (7 samples, 0.01%)</title><rect x="1188.4" y="613" width="0.1" height="15.0" fill="rgb(238,143,15)" rx="2" ry="2" />
+<text  x="1191.42" y="623.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RFilter&lt;query7(char const*)::{lambda(ROOT::VecOps::RVec&lt;int&gt; const&amp;)#4}, ROOT::Detail::RDF::RFilter&lt;query7(char const*)::{lambda(unsigned int)#1}, ROOT::Detail::RDF::RLoopManager&gt; &gt;::CheckFilters (67,841 samples, 94.57%)</title><rect x="39.7" y="517" width="1115.9" height="15.0" fill="rgb(216,41,4)" rx="2" ry="2" />
+<text  x="42.71" y="527.5" >ROOT::Detail::RDF::RFilter&lt;query7(char const*)::{lambda(ROOT::VecOps::RVec&lt;int&gt; const&amp;)#4}, ROOT::Detail::RDF::RFilter&lt;query7(char const*)::{lambda(unsigne..</text>
+</g>
+<g >
+<title>TBufferFile::ReadFastArray (142 samples, 0.20%)</title><rect x="1070.2" y="389" width="2.3" height="15.0" fill="rgb(208,58,5)" rx="2" ry="2" />
+<text  x="1073.20" y="399.5" ></text>
+</g>
+<g >
+<title>[unknown] (7 samples, 0.01%)</title><rect x="939.2" y="405" width="0.1" height="15.0" fill="rgb(236,92,12)" rx="2" ry="2" />
+<text  x="942.20" y="415.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::set_size (67 samples, 0.09%)</title><rect x="127.4" y="421" width="1.1" height="15.0" fill="rgb(225,37,4)" rx="2" ry="2" />
+<text  x="130.45" y="431.5" ></text>
+</g>
+<g >
+<title>__memset_avx2_unaligned_erms (131 samples, 0.18%)</title><rect x="948.6" y="421" width="2.1" height="15.0" fill="rgb(224,142,16)" rx="2" ry="2" />
+<text  x="951.58" y="431.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (9 samples, 0.01%)</title><rect x="1188.8" y="181" width="0.2" height="15.0" fill="rgb(225,8,18)" rx="2" ry="2" />
+<text  x="1191.85" y="191.5" ></text>
+</g>
+<g >
+<title>_int_free (13 samples, 0.02%)</title><rect x="1118.6" y="469" width="0.2" height="15.0" fill="rgb(229,211,14)" rx="2" ry="2" />
+<text  x="1121.58" y="479.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::RDefineReader::GetImpl (61,380 samples, 85.56%)</title><rect x="79.6" y="469" width="1009.7" height="15.0" fill="rgb(205,110,16)" rx="2" ry="2" />
+<text  x="82.61" y="479.5" >ROOT::Internal::RDF::RDefineReader::GetImpl</text>
+</g>
+<g >
+<title>TBranch::GetBasketImpl (4,633 samples, 6.46%)</title><rect x="989.0" y="373" width="76.2" height="15.0" fill="rgb(222,47,1)" rx="2" ry="2" />
+<text  x="992.04" y="383.5" >TBranch:..</text>
+</g>
+<g >
+<title>main (20 samples, 0.03%)</title><rect x="1188.8" y="629" width="0.3" height="15.0" fill="rgb(246,174,4)" rx="2" ry="2" />
+<text  x="1191.77" y="639.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (20 samples, 0.03%)</title><rect x="1188.8" y="549" width="0.3" height="15.0" fill="rgb(230,26,17)" rx="2" ry="2" />
+<text  x="1191.77" y="559.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::operator&amp;&amp;&lt;int, int&gt;@plt (45 samples, 0.06%)</title><rect x="1117.7" y="469" width="0.8" height="15.0" fill="rgb(232,26,1)" rx="2" ry="2" />
+<text  x="1120.72" y="479.5" ></text>
+</g>
+<g >
+<title>R__unzip (4,530 samples, 6.31%)</title><rect x="989.1" y="341" width="74.5" height="15.0" fill="rgb(249,65,30)" rx="2" ry="2" />
+<text  x="992.07" y="351.5" >R__unzip</text>
+</g>
+<g >
+<title>R__unzipZLIB (17,323 samples, 24.15%)</title><rect x="357.8" y="325" width="284.9" height="15.0" fill="rgb(221,145,41)" rx="2" ry="2" />
+<text  x="360.79" y="335.5" >R__unzipZLIB</text>
+</g>
+<g >
+<title>TTreeCache::ReadBufferNormal (38 samples, 0.05%)</title><rect x="1148.2" y="357" width="0.6" height="15.0" fill="rgb(245,182,3)" rx="2" ry="2" />
+<text  x="1151.19" y="367.5" ></text>
+</g>
+<g >
+<title>[unknown] (8 samples, 0.01%)</title><rect x="619.0" y="261" width="0.1" height="15.0" fill="rgb(252,30,27)" rx="2" ry="2" />
+<text  x="622.02" y="271.5" ></text>
+</g>
+<g >
+<title>query7 (46 samples, 0.06%)</title><rect x="1187.7" y="645" width="0.7" height="15.0" fill="rgb(254,19,21)" rx="2" ry="2" />
+<text  x="1190.66" y="655.5" ></text>
+</g>
+<g >
+<title>adler32_z (66 samples, 0.09%)</title><rect x="1147.1" y="309" width="1.1" height="15.0" fill="rgb(225,128,32)" rx="2" ry="2" />
+<text  x="1150.08" y="319.5" ></text>
+</g>
+<g >
+<title>?? (116 samples, 0.16%)</title><rect x="254.2" y="325" width="1.9" height="15.0" fill="rgb(220,94,7)" rx="2" ry="2" />
+<text  x="257.24" y="335.5" ></text>
+</g>
+<g >
+<title>[bash] (40 samples, 0.06%)</title><rect x="1189.3" y="565" width="0.7" height="15.0" fill="rgb(222,139,21)" rx="2" ry="2" />
+<text  x="1192.31" y="575.5" ></text>
+</g>
+<g >
+<title>[unknown] (18 samples, 0.03%)</title><rect x="1189.6" y="517" width="0.3" height="15.0" fill="rgb(243,58,36)" rx="2" ry="2" />
+<text  x="1192.62" y="527.5" ></text>
+</g>
+<g >
+<title>TBufferFile::ReadInt (147 samples, 0.20%)</title><rect x="1150.9" y="405" width="2.4" height="15.0" fill="rgb(250,123,27)" rx="2" ry="2" />
+<text  x="1153.85" y="415.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::grow_pod (22 samples, 0.03%)</title><rect x="1181.2" y="469" width="0.4" height="15.0" fill="rgb(232,132,37)" rx="2" ry="2" />
+<text  x="1184.22" y="479.5" ></text>
+</g>
+<g >
+<title>TFile::ReadBuffers (18 samples, 0.03%)</title><rect x="1148.2" y="309" width="0.3" height="15.0" fill="rgb(215,116,37)" rx="2" ry="2" />
+<text  x="1151.19" y="319.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (15 samples, 0.02%)</title><rect x="1188.8" y="357" width="0.3" height="15.0" fill="rgb(243,126,5)" rx="2" ry="2" />
+<text  x="1191.85" y="367.5" ></text>
+</g>
+<g >
+<title>TAxis::FindBin (127 samples, 0.18%)</title><rect x="1183.2" y="501" width="2.1" height="15.0" fill="rgb(212,100,49)" rx="2" ry="2" />
+<text  x="1186.24" y="511.5" ></text>
+</g>
+<g >
+<title>execute_command (9 samples, 0.01%)</title><rect x="1188.8" y="229" width="0.2" height="15.0" fill="rgb(254,56,52)" rx="2" ry="2" />
+<text  x="1191.85" y="239.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::set_size (17 samples, 0.02%)</title><rect x="1179.4" y="453" width="0.3" height="15.0" fill="rgb(226,33,15)" rx="2" ry="2" />
+<text  x="1182.41" y="463.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::GetROOT2 (40 samples, 0.06%)</title><rect x="1187.8" y="469" width="0.6" height="15.0" fill="rgb(210,64,44)" rx="2" ry="2" />
+<text  x="1190.76" y="479.5" ></text>
+</g>
+<g >
+<title>__GI___fork (8 samples, 0.01%)</title><rect x="1189.4" y="501" width="0.1" height="15.0" fill="rgb(227,55,29)" rx="2" ry="2" />
+<text  x="1192.36" y="511.5" ></text>
+</g>
+<g >
+<title>TTreeCache::FillBuffer()::{lambda(TTreeCache::FillBuffer()::EPass, TTreeCache::FillBuffer()::ENarrow, long long)#2}::operator() (15 samples, 0.02%)</title><rect x="1148.6" y="325" width="0.2" height="15.0" fill="rgb(217,157,47)" rx="2" ry="2" />
+<text  x="1151.56" y="335.5" ></text>
+</g>
+<g >
+<title>[bash] (10 samples, 0.01%)</title><rect x="1189.3" y="533" width="0.2" height="15.0" fill="rgb(216,64,8)" rx="2" ry="2" />
+<text  x="1192.33" y="543.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::GetROOT2 (13 samples, 0.02%)</title><rect x="1187.3" y="437" width="0.2" height="15.0" fill="rgb(213,71,38)" rx="2" ry="2" />
+<text  x="1190.32" y="447.5" ></text>
+</g>
+<g >
+<title>TChain::TChain (7 samples, 0.01%)</title><rect x="1188.6" y="501" width="0.1" height="15.0" fill="rgb(223,166,32)" rx="2" ry="2" />
+<text  x="1191.60" y="511.5" ></text>
+</g>
+<g >
+<title>?? (40 samples, 0.06%)</title><rect x="1187.8" y="565" width="0.6" height="15.0" fill="rgb(218,154,31)" rx="2" ry="2" />
+<text  x="1190.76" y="575.5" ></text>
+</g>
+<g >
+<title>TChain::TChain (40 samples, 0.06%)</title><rect x="1187.8" y="485" width="0.6" height="15.0" fill="rgb(220,149,42)" rx="2" ry="2" />
+<text  x="1190.76" y="495.5" ></text>
+</g>
+<g >
+<title>[bash] (40 samples, 0.06%)</title><rect x="1189.3" y="613" width="0.7" height="15.0" fill="rgb(252,89,1)" rx="2" ry="2" />
+<text  x="1192.31" y="623.5" ></text>
+</g>
+<g >
+<title>TLeafI::GetMaximum (259 samples, 0.36%)</title><rect x="714.4" y="405" width="4.3" height="15.0" fill="rgb(247,51,48)" rx="2" ry="2" />
+<text  x="717.44" y="415.5" ></text>
+</g>
+<g >
+<title>?? (7 samples, 0.01%)</title><rect x="1188.6" y="629" width="0.1" height="15.0" fill="rgb(254,113,50)" rx="2" ry="2" />
+<text  x="1191.60" y="639.5" ></text>
+</g>
+<g >
+<title>[bash] (9 samples, 0.01%)</title><rect x="1188.8" y="85" width="0.2" height="15.0" fill="rgb(254,120,13)" rx="2" ry="2" />
+<text  x="1191.85" y="95.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::VecOps::RVecImpl&lt;int&gt;::operator= (368 samples, 0.51%)</title><rect x="961.4" y="437" width="6.0" height="15.0" fill="rgb(247,28,33)" rx="2" ry="2" />
+<text  x="964.37" y="447.5" ></text>
+</g>
+<g >
+<title>?? (78 samples, 0.11%)</title><rect x="1110.0" y="405" width="1.3" height="15.0" fill="rgb(251,171,25)" rx="2" ry="2" />
+<text  x="1113.02" y="415.5" ></text>
+</g>
+<g >
+<title>[unknown] (7 samples, 0.01%)</title><rect x="619.0" y="165" width="0.1" height="15.0" fill="rgb(252,223,2)" rx="2" ry="2" />
+<text  x="622.03" y="175.5" ></text>
+</g>
+<g >
+<title>TBranch::ReadLeaves1Impl (12 samples, 0.02%)</title><rect x="311.1" y="277" width="0.2" height="15.0" fill="rgb(254,29,34)" rx="2" ry="2" />
+<text  x="314.10" y="287.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress (5,845 samples, 8.15%)</title><rect x="223.7" y="373" width="96.2" height="15.0" fill="rgb(246,29,44)" rx="2" ry="2" />
+<text  x="226.74" y="383.5" >ROOT::Inter..</text>
+</g>
+<g >
+<title>memset@plt (14 samples, 0.02%)</title><rect x="1089.0" y="437" width="0.3" height="15.0" fill="rgb(216,197,11)" rx="2" ry="2" />
+<text  x="1092.03" y="447.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::ProxyReadTemplate&lt;&amp;ROOT::Detail::TBranchProxy::ReadNoParentNoBranchCountNoCollection&gt; (1,761 samples, 2.45%)</title><rect x="1126.3" y="453" width="28.9" height="15.0" fill="rgb(243,200,23)" rx="2" ry="2" />
+<text  x="1129.28" y="463.5" >RO..</text>
+</g>
+<g >
+<title>TFileCacheRead::ReadBuffer (214 samples, 0.30%)</title><rect x="647.2" y="325" width="3.5" height="15.0" fill="rgb(242,157,43)" rx="2" ry="2" />
+<text  x="650.18" y="335.5" ></text>
+</g>
+<g >
+<title>__memcpy_avx_unaligned (108 samples, 0.15%)</title><rect x="128.8" y="421" width="1.8" height="15.0" fill="rgb(229,169,2)" rx="2" ry="2" />
+<text  x="131.78" y="431.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RLoopManager::RunAndCheckFilters (70,577 samples, 98.38%)</title><rect x="26.3" y="549" width="1160.9" height="15.0" fill="rgb(225,199,36)" rx="2" ry="2" />
+<text  x="29.30" y="559.5" >ROOT::Detail::RDF::RLoopManager::RunAndCheckFilters</text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::RTreeColumnReader&lt;unsigned int&gt;::GetImpl (2,234 samples, 3.11%)</title><rect x="1118.8" y="501" width="36.8" height="15.0" fill="rgb(231,25,49)" rx="2" ry="2" />
+<text  x="1121.82" y="511.5" >ROO..</text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (71 samples, 0.10%)</title><rect x="1064.1" y="293" width="1.1" height="15.0" fill="rgb(229,3,14)" rx="2" ry="2" />
+<text  x="1067.08" y="303.5" ></text>
+</g>
+<g >
+<title>[unknown] (7 samples, 0.01%)</title><rect x="619.0" y="229" width="0.1" height="15.0" fill="rgb(218,50,46)" rx="2" ry="2" />
+<text  x="622.03" y="239.5" ></text>
+</g>
+<g >
+<title>?? (8 samples, 0.01%)</title><rect x="17.1" y="501" width="0.1" height="15.0" fill="rgb(210,174,35)" rx="2" ry="2" />
+<text  x="20.07" y="511.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::ProxyReadTemplate&lt;&amp;ROOT::Detail::TBranchProxy::ReadNoParentNoBranchCountNoCollection&gt; (116 samples, 0.16%)</title><rect x="254.2" y="309" width="1.9" height="15.0" fill="rgb(217,88,15)" rx="2" ry="2" />
+<text  x="257.24" y="319.5" ></text>
+</g>
+<g >
+<title>[unknown] (7 samples, 0.01%)</title><rect x="939.2" y="389" width="0.1" height="15.0" fill="rgb(250,181,41)" rx="2" ry="2" />
+<text  x="942.20" y="399.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::VecOps::RVecImpl&lt;float&gt;::operator= (192 samples, 0.27%)</title><rect x="1178.1" y="469" width="3.1" height="15.0" fill="rgb(216,89,2)" rx="2" ry="2" />
+<text  x="1181.06" y="479.5" ></text>
+</g>
+<g >
+<title>std::swap&lt;ROOT::VecOps::RVec&lt;float&gt; &gt; (177 samples, 0.25%)</title><rect x="1170.2" y="469" width="2.9" height="15.0" fill="rgb(224,149,6)" rx="2" ry="2" />
+<text  x="1173.18" y="479.5" ></text>
+</g>
+<g >
+<title>__GI___libc_malloc (15 samples, 0.02%)</title><rect x="1086.9" y="421" width="0.3" height="15.0" fill="rgb(252,29,47)" rx="2" ry="2" />
+<text  x="1089.91" y="431.5" ></text>
+</g>
+<g >
+<title>__libc_start_main (71,560 samples, 99.75%)</title><rect x="10.4" y="645" width="1177.1" height="15.0" fill="rgb(210,118,51)" rx="2" ry="2" />
+<text  x="13.43" y="655.5" >__libc_start_main</text>
+</g>
+<g >
+<title>__memset_avx2_unaligned (71 samples, 0.10%)</title><rect x="1087.3" y="437" width="1.1" height="15.0" fill="rgb(219,35,34)" rx="2" ry="2" />
+<text  x="1090.26" y="447.5" ></text>
+</g>
+<g >
+<title>TBranch::GetEntry (23,899 samples, 33.32%)</title><rect x="321.3" y="405" width="393.1" height="15.0" fill="rgb(213,226,13)" rx="2" ry="2" />
+<text  x="324.32" y="415.5" >TBranch::GetEntry</text>
+</g>
+<g >
+<title>inflate (4,530 samples, 6.31%)</title><rect x="989.1" y="309" width="74.5" height="15.0" fill="rgb(251,72,20)" rx="2" ry="2" />
+<text  x="992.07" y="319.5" >inflate</text>
+</g>
+<g >
+<title>ROOT::Detail::VecOps::RVecImpl&lt;int&gt;::operator= (526 samples, 0.73%)</title><rect x="71.0" y="469" width="8.6" height="15.0" fill="rgb(254,134,52)" rx="2" ry="2" />
+<text  x="73.96" y="479.5" ></text>
+</g>
+<g >
+<title>[unknown] (7 samples, 0.01%)</title><rect x="619.0" y="197" width="0.1" height="15.0" fill="rgb(230,131,39)" rx="2" ry="2" />
+<text  x="622.03" y="207.5" ></text>
+</g>
+<g >
+<title>frombuf (271 samples, 0.38%)</title><rect x="311.8" y="261" width="4.5" height="15.0" fill="rgb(223,83,35)" rx="2" ry="2" />
+<text  x="314.79" y="271.5" ></text>
+</g>
+<g >
+<title>frombuf (142 samples, 0.20%)</title><rect x="1150.9" y="389" width="2.4" height="15.0" fill="rgb(216,101,30)" rx="2" ry="2" />
+<text  x="1153.93" y="399.5" ></text>
+</g>
+<g >
+<title>TTreeReader::SetEntryBase (13 samples, 0.02%)</title><rect x="26.0" y="501" width="0.3" height="15.0" fill="rgb(223,49,19)" rx="2" ry="2" />
+<text  x="29.04" y="511.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::RVecN&lt;int, 12u&gt;::RVecN (64 samples, 0.09%)</title><rect x="1111.3" y="405" width="1.1" height="15.0" fill="rgb(232,60,20)" rx="2" ry="2" />
+<text  x="1114.31" y="415.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (15 samples, 0.02%)</title><rect x="1188.8" y="389" width="0.3" height="15.0" fill="rgb(216,8,0)" rx="2" ry="2" />
+<text  x="1191.85" y="399.5" ></text>
+</g>
+<g >
+<title>?? (176 samples, 0.25%)</title><rect x="1167.3" y="469" width="2.9" height="15.0" fill="rgb(209,79,14)" rx="2" ry="2" />
+<text  x="1170.28" y="479.5" ></text>
+</g>
+<g >
+<title>TBranch::GetEntry (5,736 samples, 8.00%)</title><rect x="984.7" y="405" width="94.4" height="15.0" fill="rgb(248,212,10)" rx="2" ry="2" />
+<text  x="987.71" y="415.5" >TBranch::Ge..</text>
+</g>
+<g >
+<title>TBranch::GetEntry (672 samples, 0.94%)</title><rect x="650.8" y="389" width="11.1" height="15.0" fill="rgb(226,193,22)" rx="2" ry="2" />
+<text  x="653.84" y="399.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (10 samples, 0.01%)</title><rect x="1188.8" y="245" width="0.2" height="15.0" fill="rgb(210,134,3)" rx="2" ry="2" />
+<text  x="1191.85" y="255.5" ></text>
+</g>
+<g >
+<title>R__unzipZLIB (540 samples, 0.75%)</title><rect x="1139.3" y="341" width="8.9" height="15.0" fill="rgb(215,67,16)" rx="2" ry="2" />
+<text  x="1142.30" y="351.5" ></text>
+</g>
+<g >
+<title>TBranch::GetBasketAndFirst (659 samples, 0.92%)</title><rect x="1138.0" y="405" width="10.8" height="15.0" fill="rgb(252,125,17)" rx="2" ry="2" />
+<text  x="1140.97" y="415.5" ></text>
+</g>
+<g >
+<title>execute_command (15 samples, 0.02%)</title><rect x="1188.8" y="405" width="0.3" height="15.0" fill="rgb(206,126,21)" rx="2" ry="2" />
+<text  x="1191.85" y="415.5" ></text>
+</g>
+<g >
+<title>?? (5,932 samples, 8.27%)</title><rect x="223.7" y="389" width="97.6" height="15.0" fill="rgb(218,119,30)" rx="2" ry="2" />
+<text  x="226.74" y="399.5" >??</text>
+</g>
+<g >
+<title>[bash] (9 samples, 0.01%)</title><rect x="1188.8" y="133" width="0.2" height="15.0" fill="rgb(215,141,34)" rx="2" ry="2" />
+<text  x="1191.85" y="143.5" ></text>
+</g>
+<g >
+<title>[bash] (9 samples, 0.01%)</title><rect x="1188.8" y="53" width="0.2" height="15.0" fill="rgb(230,137,36)" rx="2" ry="2" />
+<text  x="1191.85" y="63.5" ></text>
+</g>
+<g >
+<title>[unknown] (9 samples, 0.01%)</title><rect x="619.0" y="277" width="0.1" height="15.0" fill="rgb(250,63,8)" rx="2" ry="2" />
+<text  x="622.00" y="287.5" ></text>
+</g>
+<g >
+<title>[unknown] (9 samples, 0.01%)</title><rect x="939.2" y="421" width="0.1" height="15.0" fill="rgb(250,25,19)" rx="2" ry="2" />
+<text  x="942.17" y="431.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (10 samples, 0.01%)</title><rect x="1188.8" y="277" width="0.2" height="15.0" fill="rgb(231,94,46)" rx="2" ry="2" />
+<text  x="1191.85" y="287.5" ></text>
+</g>
+<g >
+<title>make_child (29 samples, 0.04%)</title><rect x="1189.5" y="549" width="0.5" height="15.0" fill="rgb(232,196,32)" rx="2" ry="2" />
+<text  x="1192.49" y="559.5" ></text>
+</g>
+<g >
+<title>main (46 samples, 0.06%)</title><rect x="1187.7" y="661" width="0.7" height="15.0" fill="rgb(220,122,23)" rx="2" ry="2" />
+<text  x="1190.66" y="671.5" ></text>
+</g>
+<g >
+<title>TBufferFile::ReadInt (301 samples, 0.42%)</title><rect x="311.3" y="293" width="5.0" height="15.0" fill="rgb(250,86,3)" rx="2" ry="2" />
+<text  x="314.30" y="303.5" ></text>
+</g>
+<g >
+<title>memmove@plt (22 samples, 0.03%)</title><rect x="136.6" y="421" width="0.4" height="15.0" fill="rgb(236,226,50)" rx="2" ry="2" />
+<text  x="139.61" y="431.5" ></text>
+</g>
+<g >
+<title>query7 (18 samples, 0.03%)</title><rect x="1188.4" y="661" width="0.3" height="15.0" fill="rgb(243,174,40)" rx="2" ry="2" />
+<text  x="1191.42" y="671.5" ></text>
+</g>
+<g >
+<title>TChain::TChain (13 samples, 0.02%)</title><rect x="1187.3" y="453" width="0.2" height="15.0" fill="rgb(223,91,42)" rx="2" ry="2" />
+<text  x="1190.32" y="463.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::RDefineReader::GetImpl (99 samples, 0.14%)</title><rect x="1161.7" y="485" width="1.6" height="15.0" fill="rgb(222,124,11)" rx="2" ry="2" />
+<text  x="1164.71" y="495.5" ></text>
+</g>
+<g >
+<title>main (42 samples, 0.06%)</title><rect x="1189.3" y="629" width="0.7" height="15.0" fill="rgb(213,119,11)" rx="2" ry="2" />
+<text  x="1192.31" y="639.5" ></text>
+</g>
+<g >
+<title>[libz.so.1.2.11] (15,644 samples, 21.81%)</title><rect x="361.8" y="293" width="257.3" height="15.0" fill="rgb(239,48,24)" rx="2" ry="2" />
+<text  x="364.82" y="303.5" >[libz.so.1.2.11]</text>
+</g>
+<g >
+<title>TBranch::GetBasketAndFirst (4,689 samples, 6.54%)</title><rect x="988.1" y="389" width="77.1" height="15.0" fill="rgb(205,18,25)" rx="2" ry="2" />
+<text  x="991.12" y="399.5" >TBranch:..</text>
+</g>
+<g >
+<title>__memset_avx2_unaligned (80 samples, 0.11%)</title><rect x="947.3" y="421" width="1.3" height="15.0" fill="rgb(244,64,51)" rx="2" ry="2" />
+<text  x="950.26" y="431.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress (224 samples, 0.31%)</title><rect x="981.0" y="357" width="3.7" height="15.0" fill="rgb(207,166,31)" rx="2" ry="2" />
+<text  x="984.03" y="367.5" ></text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (342 samples, 0.48%)</title><rect x="130.6" y="421" width="5.6" height="15.0" fill="rgb(250,26,13)" rx="2" ry="2" />
+<text  x="133.56" y="431.5" ></text>
+</g>
+<g >
+<title>[unknown] (8 samples, 0.01%)</title><rect x="1189.8" y="453" width="0.1" height="15.0" fill="rgb(236,225,41)" rx="2" ry="2" />
+<text  x="1192.79" y="463.5" ></text>
+</g>
+<g >
+<title>[bash] (15 samples, 0.02%)</title><rect x="1188.8" y="341" width="0.3" height="15.0" fill="rgb(241,5,24)" rx="2" ry="2" />
+<text  x="1191.85" y="351.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (9 samples, 0.01%)</title><rect x="1188.8" y="213" width="0.2" height="15.0" fill="rgb(216,166,16)" rx="2" ry="2" />
+<text  x="1191.85" y="223.5" ></text>
+</g>
+<g >
+<title>?? (40 samples, 0.06%)</title><rect x="1187.8" y="613" width="0.6" height="15.0" fill="rgb(227,128,9)" rx="2" ry="2" />
+<text  x="1190.76" y="623.5" ></text>
+</g>
+<g >
+<title>fgets (12 samples, 0.02%)</title><rect x="1188.2" y="389" width="0.2" height="15.0" fill="rgb(247,3,46)" rx="2" ry="2" />
+<text  x="1191.22" y="399.5" ></text>
+</g>
+<g >
+<title>TTreeCache::FillBuffer (15 samples, 0.02%)</title><rect x="1148.6" y="341" width="0.2" height="15.0" fill="rgb(253,125,20)" rx="2" ry="2" />
+<text  x="1151.56" y="351.5" ></text>
+</g>
+<g >
+<title>[unknown] (8 samples, 0.01%)</title><rect x="1188.0" y="325" width="0.1" height="15.0" fill="rgb(217,68,53)" rx="2" ry="2" />
+<text  x="1190.96" y="335.5" ></text>
+</g>
+<g >
+<title>[bash] (10 samples, 0.01%)</title><rect x="1188.8" y="293" width="0.2" height="15.0" fill="rgb(209,18,31)" rx="2" ry="2" />
+<text  x="1191.85" y="303.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (10 samples, 0.01%)</title><rect x="1189.3" y="549" width="0.2" height="15.0" fill="rgb(227,85,50)" rx="2" ry="2" />
+<text  x="1192.33" y="559.5" ></text>
+</g>
+<g >
+<title>__GI___libc_free (12 samples, 0.02%)</title><rect x="128.6" y="421" width="0.2" height="15.0" fill="rgb(213,132,54)" rx="2" ry="2" />
+<text  x="131.58" y="431.5" ></text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (132 samples, 0.18%)</title><rect x="965.1" y="421" width="2.2" height="15.0" fill="rgb(246,178,18)" rx="2" ry="2" />
+<text  x="968.09" y="431.5" ></text>
+</g>
+<g >
+<title>?? (38 samples, 0.05%)</title><rect x="30.2" y="533" width="0.6" height="15.0" fill="rgb(252,59,26)" rx="2" ry="2" />
+<text  x="33.22" y="543.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RDefine&lt;query7(char const*)::{lambda(ROOT::VecOps::RVec&lt;float&gt; const&amp;)#2}, ROOT::Detail::RDF::CustomColExtraArgs::None&gt;::Update (8,418 samples, 11.73%)</title><rect x="950.8" y="453" width="138.5" height="15.0" fill="rgb(215,226,42)" rx="2" ry="2" />
+<text  x="953.80" y="463.5" >ROOT::Detail::RDF..</text>
+</g>
+<g >
+<title>execute_command (20 samples, 0.03%)</title><rect x="1188.8" y="453" width="0.3" height="15.0" fill="rgb(206,45,2)" rx="2" ry="2" />
+<text  x="1191.77" y="463.5" ></text>
+</g>
+<g >
+<title>all (71,736 samples, 100%)</title><rect x="10.0" y="693" width="1180.0" height="15.0" fill="rgb(244,186,19)" rx="2" ry="2" />
+<text  x="13.00" y="703.5" ></text>
+</g>
+<g >
+<title>?? (7 samples, 0.01%)</title><rect x="1188.6" y="565" width="0.1" height="15.0" fill="rgb(228,108,50)" rx="2" ry="2" />
+<text  x="1191.60" y="575.5" ></text>
+</g>
+<g >
+<title>cmpl (71,658 samples, 99.89%)</title><rect x="10.0" y="677" width="1178.7" height="15.0" fill="rgb(225,113,32)" rx="2" ry="2" />
+<text  x="13.02" y="687.5" >cmpl</text>
+</g>
+<g >
+<title>frombuf (283 samples, 0.39%)</title><rect x="674.4" y="357" width="4.6" height="15.0" fill="rgb(219,27,39)" rx="2" ry="2" />
+<text  x="677.38" y="367.5" ></text>
+</g>
+<g >
+<title>TFileCacheRead::ReadBuffer (23 samples, 0.03%)</title><rect x="1148.2" y="341" width="0.4" height="15.0" fill="rgb(222,0,30)" rx="2" ry="2" />
+<text  x="1151.19" y="351.5" ></text>
+</g>
+<g >
+<title>_start (42 samples, 0.06%)</title><rect x="1189.3" y="661" width="0.7" height="15.0" fill="rgb(221,193,44)" rx="2" ry="2" />
+<text  x="1192.31" y="671.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (20 samples, 0.03%)</title><rect x="1188.8" y="581" width="0.3" height="15.0" fill="rgb(227,214,49)" rx="2" ry="2" />
+<text  x="1191.77" y="591.5" ></text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (11 samples, 0.02%)</title><rect x="863.0" y="405" width="0.2" height="15.0" fill="rgb(214,86,45)" rx="2" ry="2" />
+<text  x="866.01" y="415.5" ></text>
+</g>
+<g >
+<title>TLeafF::ReadBasket (2,018 samples, 2.81%)</title><rect x="681.2" y="389" width="33.2" height="15.0" fill="rgb(242,121,41)" rx="2" ry="2" />
+<text  x="684.23" y="399.5" >TL..</text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::set_size (68 samples, 0.09%)</title><rect x="894.2" y="405" width="1.1" height="15.0" fill="rgb(227,108,29)" rx="2" ry="2" />
+<text  x="897.16" y="415.5" ></text>
+</g>
+<g >
+<title>?? (13 samples, 0.02%)</title><rect x="1187.3" y="485" width="0.2" height="15.0" fill="rgb(215,190,4)" rx="2" ry="2" />
+<text  x="1190.32" y="495.5" ></text>
+</g>
+<g >
+<title>execute_command (20 samples, 0.03%)</title><rect x="1188.8" y="485" width="0.3" height="15.0" fill="rgb(221,15,13)" rx="2" ry="2" />
+<text  x="1191.77" y="495.5" ></text>
+</g>
+<g >
+<title>[bash] (9 samples, 0.01%)</title><rect x="1188.8" y="149" width="0.2" height="15.0" fill="rgb(242,27,18)" rx="2" ry="2" />
+<text  x="1191.85" y="159.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::RDefineReader::GetImpl (1,615 samples, 2.25%)</title><rect x="1155.6" y="517" width="26.6" height="15.0" fill="rgb(228,99,7)" rx="2" ry="2" />
+<text  x="1158.64" y="527.5" >R..</text>
+</g>
+<g >
+<title>[unknown] (7 samples, 0.01%)</title><rect x="939.2" y="373" width="0.1" height="15.0" fill="rgb(225,222,10)" rx="2" ry="2" />
+<text  x="942.20" y="383.5" ></text>
+</g>
+<g >
+<title>__memcpy_avx_unaligned (94 samples, 0.13%)</title><rect x="889.1" y="389" width="1.6" height="15.0" fill="rgb(229,37,32)" rx="2" ry="2" />
+<text  x="892.13" y="399.5" ></text>
+</g>
+<g >
+<title>__fmod (280 samples, 0.39%)</title><rect x="939.3" y="421" width="4.6" height="15.0" fill="rgb(251,50,38)" rx="2" ry="2" />
+<text  x="942.31" y="431.5" ></text>
+</g>
+<g >
+<title>ROOT::RDataFrame::RDataFrame (40 samples, 0.06%)</title><rect x="1187.8" y="629" width="0.6" height="15.0" fill="rgb(225,24,44)" rx="2" ry="2" />
+<text  x="1190.76" y="639.5" ></text>
+</g>
+<g >
+<title>__GI__IO_getline_info (10 samples, 0.01%)</title><rect x="1188.3" y="373" width="0.1" height="15.0" fill="rgb(215,50,0)" rx="2" ry="2" />
+<text  x="1191.26" y="383.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::ProxyReadTemplate&lt;&amp;ROOT::Detail::TBranchProxy::ReadNoParentNoBranchCountNoCollection&gt; (3,874 samples, 5.40%)</title><rect x="256.1" y="325" width="63.8" height="15.0" fill="rgb(250,141,46)" rx="2" ry="2" />
+<text  x="259.15" y="335.5" >ROOT::I..</text>
+</g>
+<g >
+<title>TLeafI::GetMaximum (29 samples, 0.04%)</title><rect x="1079.1" y="405" width="0.4" height="15.0" fill="rgb(246,103,47)" rx="2" ry="2" />
+<text  x="1082.07" y="415.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (15 samples, 0.02%)</title><rect x="1188.8" y="309" width="0.3" height="15.0" fill="rgb(234,31,11)" rx="2" ry="2" />
+<text  x="1191.85" y="319.5" ></text>
+</g>
+<g >
+<title>_start (20 samples, 0.03%)</title><rect x="1188.8" y="661" width="0.3" height="15.0" fill="rgb(220,81,18)" rx="2" ry="2" />
+<text  x="1191.77" y="671.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress@plt (87 samples, 0.12%)</title><rect x="319.9" y="373" width="1.4" height="15.0" fill="rgb(254,35,7)" rx="2" ry="2" />
+<text  x="322.89" y="383.5" ></text>
+</g>
+<g >
+<title>execute_command (20 samples, 0.03%)</title><rect x="1188.8" y="517" width="0.3" height="15.0" fill="rgb(217,99,3)" rx="2" ry="2" />
+<text  x="1191.77" y="527.5" ></text>
+</g>
+<g >
+<title>TBranch::ReadLeaves1Impl (182 samples, 0.25%)</title><rect x="308.3" y="293" width="3.0" height="15.0" fill="rgb(244,184,26)" rx="2" ry="2" />
+<text  x="311.31" y="303.5" ></text>
+</g>
+<g >
+<title>TSystem::DynamicPathName (40 samples, 0.06%)</title><rect x="1187.8" y="437" width="0.6" height="15.0" fill="rgb(233,55,51)" rx="2" ry="2" />
+<text  x="1190.76" y="447.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::operator&amp;&amp;&lt;int, int&gt; (1,052 samples, 1.47%)</title><rect x="1100.4" y="453" width="17.3" height="15.0" fill="rgb(216,82,28)" rx="2" ry="2" />
+<text  x="1103.42" y="463.5" ></text>
+</g>
+<g >
+<title>__GI___fork (20 samples, 0.03%)</title><rect x="1187.9" y="357" width="0.3" height="15.0" fill="rgb(231,182,33)" rx="2" ry="2" />
+<text  x="1190.89" y="367.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::VecOps::RVecImpl&lt;float&gt;::operator= (105 samples, 0.15%)</title><rect x="1171.4" y="453" width="1.7" height="15.0" fill="rgb(212,134,32)" rx="2" ry="2" />
+<text  x="1174.36" y="463.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (20 samples, 0.03%)</title><rect x="1188.8" y="533" width="0.3" height="15.0" fill="rgb(217,156,5)" rx="2" ry="2" />
+<text  x="1191.77" y="543.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::GetROOT2 (7 samples, 0.01%)</title><rect x="1188.6" y="485" width="0.1" height="15.0" fill="rgb(243,173,11)" rx="2" ry="2" />
+<text  x="1191.60" y="495.5" ></text>
+</g>
+<g >
+<title>TBufferFile::ReadArray (29 samples, 0.04%)</title><rect x="1063.6" y="341" width="0.5" height="15.0" fill="rgb(223,105,21)" rx="2" ry="2" />
+<text  x="1066.59" y="351.5" ></text>
+</g>
+<g >
+<title>TBasket::ReadBasketBuffers (17,814 samples, 24.83%)</title><rect x="357.7" y="357" width="293.0" height="15.0" fill="rgb(233,114,39)" rx="2" ry="2" />
+<text  x="360.72" y="367.5" >TBasket::ReadBasketBuffers</text>
+</g>
+<g >
+<title>?? (7 samples, 0.01%)</title><rect x="1188.6" y="613" width="0.1" height="15.0" fill="rgb(240,138,22)" rx="2" ry="2" />
+<text  x="1191.60" y="623.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::RAction&lt;ROOT::Internal::RDF::FillParHelper&lt;TH1D&gt;, ROOT::Detail::RDF::RFilter&lt;query7(char const*)::{lambda(ROOT::VecOps::RVec&lt;int&gt; const&amp;)#4}, ROOT::Detail::RDF::RFilter&lt;query7(char const*)::{lambda(unsigned int)#1}, ROOT::Detail::RDF::RLoopManager&gt; &gt;, ROOT::TypeTraits::TypeList&lt;float&gt; &gt;::Run (69,775 samples, 97.27%)</title><rect x="34.5" y="533" width="1147.7" height="15.0" fill="rgb(243,193,22)" rx="2" ry="2" />
+<text  x="37.46" y="543.5" >ROOT::Internal::RDF::RAction&lt;ROOT::Internal::RDF::FillParHelper&lt;TH1D&gt;, ROOT::Detail::RDF::RFilter&lt;query7(char const*)::{lambda(ROOT::VecOps::RVec&lt;int&gt; const&amp;)#4..</text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::RTreeColumnReader&lt;ROOT::VecOps::RVec&lt;float&gt; &gt;::GetImpl (38,778 samples, 54.06%)</title><rect x="137.0" y="437" width="637.8" height="15.0" fill="rgb(236,10,49)" rx="2" ry="2" />
+<text  x="139.97" y="447.5" >ROOT::Internal::RDF::RTreeColumnReader&lt;ROOT::VecOps::RVec&lt;float&gt; &gt;::GetImpl</text>
+</g>
+<g >
+<title>__memset_avx2_unaligned_erms (133 samples, 0.19%)</title><rect x="936.4" y="405" width="2.1" height="15.0" fill="rgb(232,204,27)" rx="2" ry="2" />
+<text  x="939.35" y="415.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::grow_pod (286 samples, 0.40%)</title><rect x="858.6" y="421" width="4.8" height="15.0" fill="rgb(239,29,52)" rx="2" ry="2" />
+<text  x="861.65" y="431.5" ></text>
+</g>
+<g >
+<title>ROOT::RDataFrame::RDataFrame (13 samples, 0.02%)</title><rect x="1187.3" y="469" width="0.2" height="15.0" fill="rgb(245,2,11)" rx="2" ry="2" />
+<text  x="1190.32" y="479.5" ></text>
+</g>
+<g >
+<title>TBranch::GetBasketAndFirst (953 samples, 1.33%)</title><rect x="291.1" y="293" width="15.7" height="15.0" fill="rgb(239,143,44)" rx="2" ry="2" />
+<text  x="294.10" y="303.5" ></text>
+</g>
+<g >
+<title>command_substitute (9 samples, 0.01%)</title><rect x="1188.8" y="37" width="0.2" height="15.0" fill="rgb(242,0,17)" rx="2" ry="2" />
+<text  x="1191.85" y="47.5" ></text>
+</g>
+<g >
+<title>TH1::Fill (306 samples, 0.43%)</title><rect x="1182.2" y="533" width="5.0" height="15.0" fill="rgb(244,150,18)" rx="2" ry="2" />
+<text  x="1185.20" y="543.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::operator&amp;&amp;&lt;int, int&gt; (1,730 samples, 2.41%)</title><rect x="1089.3" y="469" width="28.4" height="15.0" fill="rgb(248,163,21)" rx="2" ry="2" />
+<text  x="1092.27" y="479.5" >RO..</text>
+</g>
+<g >
+<title>TROOT::InitInterpreter (13 samples, 0.02%)</title><rect x="1187.3" y="421" width="0.2" height="15.0" fill="rgb(236,185,13)" rx="2" ry="2" />
+<text  x="1190.32" y="431.5" ></text>
+</g>
+<g >
+<title>?? (13 samples, 0.02%)</title><rect x="1187.3" y="517" width="0.2" height="15.0" fill="rgb(228,80,0)" rx="2" ry="2" />
+<text  x="1190.32" y="527.5" ></text>
+</g>
+<g >
+<title>std::swap&lt;ROOT::VecOps::RVec&lt;float&gt; &gt; (437 samples, 0.61%)</title><rect x="1079.5" y="421" width="7.2" height="15.0" fill="rgb(212,27,41)" rx="2" ry="2" />
+<text  x="1082.54" y="431.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RLoopManager::Run (71,546 samples, 99.74%)</title><rect x="10.4" y="581" width="1176.9" height="15.0" fill="rgb(240,49,8)" rx="2" ry="2" />
+<text  x="13.44" y="591.5" >ROOT::Detail::RDF::RLoopManager::Run</text>
+</g>
+<g >
+<title>ROOT::RDataFrame::RDataFrame (7 samples, 0.01%)</title><rect x="1188.6" y="517" width="0.1" height="15.0" fill="rgb(234,144,15)" rx="2" ry="2" />
+<text  x="1191.60" y="527.5" ></text>
+</g>
+<g >
+<title>__memset_avx2_unaligned_erms (50 samples, 0.07%)</title><rect x="1116.9" y="437" width="0.8" height="15.0" fill="rgb(215,136,25)" rx="2" ry="2" />
+<text  x="1119.90" y="447.5" ></text>
+</g>
+<g >
+<title>TTreeReader::SetEntryBase (8 samples, 0.01%)</title><rect x="17.1" y="485" width="0.1" height="15.0" fill="rgb(246,206,38)" rx="2" ry="2" />
+<text  x="20.07" y="495.5" ></text>
+</g>
+<g >
+<title>TBufferFile::ReadFastArray (133 samples, 0.19%)</title><rect x="679.0" y="373" width="2.2" height="15.0" fill="rgb(232,0,33)" rx="2" ry="2" />
+<text  x="682.04" y="383.5" ></text>
+</g>
+<g >
+<title>frombuf (76 samples, 0.11%)</title><rect x="1070.6" y="357" width="1.3" height="15.0" fill="rgb(213,98,16)" rx="2" ry="2" />
+<text  x="1073.61" y="367.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::ProxyReadTemplate&lt;&amp;ROOT::Detail::TBranchProxy::ReadNoParentNoBranchCountNoCollection&gt; (174 samples, 0.24%)</title><rect x="981.9" y="325" width="2.8" height="15.0" fill="rgb(247,89,51)" rx="2" ry="2" />
+<text  x="984.85" y="335.5" ></text>
+</g>
+<g >
+<title>__memset_avx2_unaligned (165 samples, 0.23%)</title><rect x="1114.2" y="437" width="2.7" height="15.0" fill="rgb(232,52,34)" rx="2" ry="2" />
+<text  x="1117.19" y="447.5" ></text>
+</g>
+<g >
+<title>adler32_z (1,429 samples, 1.99%)</title><rect x="619.1" y="293" width="23.6" height="15.0" fill="rgb(228,219,49)" rx="2" ry="2" />
+<text  x="622.15" y="303.5" >a..</text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::GetValidatedColumnNames (7 samples, 0.01%)</title><rect x="1188.4" y="629" width="0.1" height="15.0" fill="rgb(246,215,45)" rx="2" ry="2" />
+<text  x="1191.42" y="639.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::ProxyReadTemplate&lt;&amp;ROOT::Detail::TBranchProxy::ReadNoParentNoBranchCountNoCollection&gt; (221 samples, 0.31%)</title><rect x="981.1" y="341" width="3.6" height="15.0" fill="rgb(215,44,11)" rx="2" ry="2" />
+<text  x="984.08" y="351.5" ></text>
+</g>
+<g >
+<title>[libz.so.1.2.11] (4,187 samples, 5.84%)</title><rect x="989.9" y="293" width="68.9" height="15.0" fill="rgb(217,197,11)" rx="2" ry="2" />
+<text  x="992.90" y="303.5" >[libz.s..</text>
+</g>
+<g >
+<title>frombuf (71 samples, 0.10%)</title><rect x="646.0" y="309" width="1.1" height="15.0" fill="rgb(206,150,49)" rx="2" ry="2" />
+<text  x="648.98" y="319.5" ></text>
+</g>
+<g >
+<title>TBranch::GetBasketImpl (863 samples, 1.20%)</title><rect x="292.6" y="277" width="14.2" height="15.0" fill="rgb(208,159,7)" rx="2" ry="2" />
+<text  x="295.58" y="287.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::ProxyReadTemplate&lt;&amp;ROOT::Detail::TBranchProxy::ReadNoParentNoBranchCountNoCollection&gt; (101 samples, 0.14%)</title><rect x="1168.4" y="389" width="1.7" height="15.0" fill="rgb(217,124,6)" rx="2" ry="2" />
+<text  x="1171.42" y="399.5" ></text>
+</g>
+<g >
+<title>?? (165 samples, 0.23%)</title><rect x="1167.5" y="437" width="2.7" height="15.0" fill="rgb(223,181,8)" rx="2" ry="2" />
+<text  x="1170.46" y="447.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::VecOps::RVecImpl&lt;float&gt;::operator= (2,405 samples, 3.35%)</title><rect x="735.2" y="405" width="39.6" height="15.0" fill="rgb(205,108,49)" rx="2" ry="2" />
+<text  x="738.23" y="415.5" >ROO..</text>
+</g>
+<g >
+<title>ROOT::VecOps::RVecN&lt;int, 12u&gt;::RVecN (110 samples, 0.15%)</title><rect x="1112.4" y="421" width="1.8" height="15.0" fill="rgb(247,179,30)" rx="2" ry="2" />
+<text  x="1115.36" y="431.5" ></text>
+</g>
+<g >
+<title>__GI___libc_free (9 samples, 0.01%)</title><rect x="75.7" y="453" width="0.2" height="15.0" fill="rgb(211,207,38)" rx="2" ry="2" />
+<text  x="78.71" y="463.5" ></text>
+</g>
+<g >
+<title>?? (283 samples, 0.39%)</title><rect x="674.4" y="373" width="4.6" height="15.0" fill="rgb(249,95,14)" rx="2" ry="2" />
+<text  x="677.38" y="383.5" ></text>
+</g>
+<g >
+<title>?? (13 samples, 0.02%)</title><rect x="1187.3" y="581" width="0.2" height="15.0" fill="rgb(242,229,5)" rx="2" ry="2" />
+<text  x="1190.32" y="591.5" ></text>
+</g>
+<g >
+<title>R__unzip (540 samples, 0.75%)</title><rect x="1139.3" y="357" width="8.9" height="15.0" fill="rgb(205,180,9)" rx="2" ry="2" />
+<text  x="1142.30" y="367.5" ></text>
+</g>
+<g >
+<title>TH1::Fill (281 samples, 0.39%)</title><rect x="1182.6" y="517" width="4.6" height="15.0" fill="rgb(231,167,46)" rx="2" ry="2" />
+<text  x="1185.61" y="527.5" ></text>
+</g>
+<g >
+<title>[unknown] (7 samples, 0.01%)</title><rect x="619.0" y="213" width="0.1" height="15.0" fill="rgb(241,222,24)" rx="2" ry="2" />
+<text  x="622.03" y="223.5" ></text>
+</g>
+<g >
+<title>R__unzipZLIB (4,530 samples, 6.31%)</title><rect x="989.1" y="325" width="74.5" height="15.0" fill="rgb(222,73,12)" rx="2" ry="2" />
+<text  x="992.07" y="335.5" >R__unzip..</text>
+</g>
+<g >
+<title>TLeafI::GetMaximum (59 samples, 0.08%)</title><rect x="706.0" y="373" width="1.0" height="15.0" fill="rgb(208,229,3)" rx="2" ry="2" />
+<text  x="708.98" y="383.5" ></text>
+</g>
+<g >
+<title>TBranch::ReadLeaves1Impl (136 samples, 0.19%)</title><rect x="1068.0" y="389" width="2.2" height="15.0" fill="rgb(219,75,26)" rx="2" ry="2" />
+<text  x="1070.96" y="399.5" ></text>
+</g>
+<g >
+<title>TBufferFile::ReadArray (269 samples, 0.37%)</title><rect x="642.8" y="341" width="4.4" height="15.0" fill="rgb(244,57,45)" rx="2" ry="2" />
+<text  x="645.75" y="351.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (20 samples, 0.03%)</title><rect x="1188.8" y="469" width="0.3" height="15.0" fill="rgb(237,41,1)" rx="2" ry="2" />
+<text  x="1191.77" y="479.5" ></text>
+</g>
+<g >
+<title>_IO_new_proc_open (20 samples, 0.03%)</title><rect x="1187.9" y="373" width="0.3" height="15.0" fill="rgb(233,108,6)" rx="2" ry="2" />
+<text  x="1190.89" y="383.5" ></text>
+</g>
+<g >
+<title>execute_command (20 samples, 0.03%)</title><rect x="1188.8" y="565" width="0.3" height="15.0" fill="rgb(207,102,0)" rx="2" ry="2" />
+<text  x="1191.77" y="575.5" ></text>
+</g>
+<g >
+<title>[unknown] (17 samples, 0.02%)</title><rect x="1189.6" y="469" width="0.3" height="15.0" fill="rgb(227,145,10)" rx="2" ry="2" />
+<text  x="1192.64" y="479.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress (347 samples, 0.48%)</title><rect x="979.0" y="373" width="5.7" height="15.0" fill="rgb(215,14,17)" rx="2" ry="2" />
+<text  x="982.01" y="383.5" ></text>
+</g>
+<g >
+<title>TROOT::InitInterpreter (40 samples, 0.06%)</title><rect x="1187.8" y="453" width="0.6" height="15.0" fill="rgb(247,8,19)" rx="2" ry="2" />
+<text  x="1190.76" y="463.5" ></text>
+</g>
+<g >
+<title>?? (6,069 samples, 8.46%)</title><rect x="221.5" y="405" width="99.8" height="15.0" fill="rgb(222,135,32)" rx="2" ry="2" />
+<text  x="224.49" y="415.5" >??</text>
+</g>
+<g >
+<title>TTreeCache::ReadBufferNormal (215 samples, 0.30%)</title><rect x="647.2" y="341" width="3.5" height="15.0" fill="rgb(251,115,27)" rx="2" ry="2" />
+<text  x="650.18" y="351.5" ></text>
+</g>
+<g >
+<title>__ieee754_fmod (203 samples, 0.28%)</title><rect x="943.9" y="421" width="3.4" height="15.0" fill="rgb(246,196,40)" rx="2" ry="2" />
+<text  x="946.92" y="431.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::VecOps::RVecImpl&lt;float&gt;::operator= (759 samples, 1.06%)</title><rect x="881.7" y="405" width="12.5" height="15.0" fill="rgb(247,97,20)" rx="2" ry="2" />
+<text  x="884.68" y="415.5" ></text>
+</g>
+<g >
+<title>?? (40 samples, 0.06%)</title><rect x="1187.8" y="581" width="0.6" height="15.0" fill="rgb(215,32,3)" rx="2" ry="2" />
+<text  x="1190.76" y="591.5" ></text>
+</g>
+<g >
+<title>__GI___libc_malloc (27 samples, 0.04%)</title><rect x="1111.8" y="373" width="0.5" height="15.0" fill="rgb(215,160,11)" rx="2" ry="2" />
+<text  x="1114.82" y="383.5" ></text>
+</g>
+<g >
+<title>_int_free (10 samples, 0.01%)</title><rect x="1182.0" y="485" width="0.2" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="1185.04" y="495.5" ></text>
+</g>
+<g >
+<title>TBufferFile::ReadFastArray (41 samples, 0.06%)</title><rect x="1071.9" y="373" width="0.6" height="15.0" fill="rgb(241,97,19)" rx="2" ry="2" />
+<text  x="1074.86" y="383.5" ></text>
+</g>
+<g >
+<title>__GI___libc_free (41 samples, 0.06%)</title><rect x="927.7" y="405" width="0.6" height="15.0" fill="rgb(206,206,10)" rx="2" ry="2" />
+<text  x="930.65" y="415.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RDefine&lt;ROOT::VecOps::RVec&lt;int&gt; (*)(ROOT::VecOps::RVec&lt;float&gt; const&amp;, ROOT::VecOps::RVec&lt;float&gt; const&amp;, ROOT::VecOps::RVec&lt;float&gt; const&amp;, ROOT::VecOps::RVec&lt;float&gt; const&amp;, ROOT::VecOps::RVec&lt;float&gt; const&amp;), ROOT::Detail::RDF::CustomColExtraArgs::None&gt;::Update (52,554 samples, 73.26%)</title><rect x="86.3" y="453" width="864.5" height="15.0" fill="rgb(223,91,27)" rx="2" ry="2" />
+<text  x="89.32" y="463.5" >ROOT::Detail::RDF::RDefine&lt;ROOT::VecOps::RVec&lt;int&gt; (*)(ROOT::VecOps::RVec&lt;float&gt; const&amp;, ROOT::VecOps::RVec&lt;float&gt; const..</text>
+</g>
+<g >
+<title>?? (40 samples, 0.06%)</title><rect x="1187.8" y="549" width="0.6" height="15.0" fill="rgb(243,79,46)" rx="2" ry="2" />
+<text  x="1190.76" y="559.5" ></text>
+</g>
+<g >
+<title>[bash] (15 samples, 0.02%)</title><rect x="1188.8" y="325" width="0.3" height="15.0" fill="rgb(251,9,40)" rx="2" ry="2" />
+<text  x="1191.85" y="335.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (15 samples, 0.02%)</title><rect x="1188.8" y="421" width="0.3" height="15.0" fill="rgb(233,152,6)" rx="2" ry="2" />
+<text  x="1191.85" y="431.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::GetBranchNames[abi:cxx11] (7 samples, 0.01%)</title><rect x="1188.4" y="597" width="0.1" height="15.0" fill="rgb(248,225,42)" rx="2" ry="2" />
+<text  x="1191.42" y="607.5" ></text>
+</g>
+<g >
+<title>TBranch::GetEntry (163 samples, 0.23%)</title><rect x="1065.3" y="389" width="2.7" height="15.0" fill="rgb(235,53,50)" rx="2" ry="2" />
+<text  x="1068.28" y="399.5" ></text>
+</g>
+<g >
+<title>__memset_avx2_unaligned_erms (37 samples, 0.05%)</title><rect x="1088.4" y="437" width="0.6" height="15.0" fill="rgb(226,131,22)" rx="2" ry="2" />
+<text  x="1091.43" y="447.5" ></text>
+</g>
+<g >
+<title>__GI___fork (24 samples, 0.03%)</title><rect x="1189.5" y="533" width="0.4" height="15.0" fill="rgb(245,40,31)" rx="2" ry="2" />
+<text  x="1192.52" y="543.5" ></text>
+</g>
+<g >
+<title>TBranch::GetEntry (52 samples, 0.07%)</title><rect x="1148.8" y="405" width="0.9" height="15.0" fill="rgb(217,218,14)" rx="2" ry="2" />
+<text  x="1151.84" y="415.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RDefine&lt;query7(char const*)::{lambda(ROOT::VecOps::RVec&lt;int&gt; const&amp;, ROOT::VecOps::RVec&lt;int&gt; const&amp;, ROOT::VecOps::RVec&lt;int&gt; const&amp;)#3}, ROOT::Detail::RDF::CustomColExtraArgs::None&gt;::Update (64,558 samples, 89.99%)</title><rect x="56.9" y="485" width="1061.9" height="15.0" fill="rgb(243,118,25)" rx="2" ry="2" />
+<text  x="59.90" y="495.5" >ROOT::Detail::RDF::RDefine&lt;query7(char const*)::{lambda(ROOT::VecOps::RVec&lt;int&gt; const&amp;, ROOT::VecOps::RVec&lt;int&gt; const&amp;, ROOT::VecOps::RVec&lt;int&gt; con..</text>
+</g>
+<g >
+<title>execute_command_internal (40 samples, 0.06%)</title><rect x="1189.3" y="581" width="0.7" height="15.0" fill="rgb(234,204,33)" rx="2" ry="2" />
+<text  x="1192.31" y="591.5" ></text>
+</g>
+<g >
+<title>DynamicPath (40 samples, 0.06%)</title><rect x="1187.8" y="405" width="0.6" height="15.0" fill="rgb(245,110,31)" rx="2" ry="2" />
+<text  x="1190.76" y="415.5" ></text>
+</g>
+<g >
+<title>[unknown] (17 samples, 0.02%)</title><rect x="1189.6" y="485" width="0.3" height="15.0" fill="rgb(223,216,25)" rx="2" ry="2" />
+<text  x="1192.64" y="495.5" ></text>
+</g>
+<g >
+<title>adler32_z (293 samples, 0.41%)</title><rect x="1058.8" y="293" width="4.8" height="15.0" fill="rgb(244,5,51)" rx="2" ry="2" />
+<text  x="1061.77" y="303.5" ></text>
+</g>
+<g >
+<title>[unknown] (8 samples, 0.01%)</title><rect x="619.0" y="245" width="0.1" height="15.0" fill="rgb(225,82,20)" rx="2" ry="2" />
+<text  x="622.02" y="255.5" ></text>
+</g>
+<g >
+<title>memset@plt (38 samples, 0.05%)</title><rect x="938.5" y="405" width="0.7" height="15.0" fill="rgb(241,80,26)" rx="2" ry="2" />
+<text  x="941.54" y="415.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (20 samples, 0.03%)</title><rect x="1188.8" y="437" width="0.3" height="15.0" fill="rgb(254,99,1)" rx="2" ry="2" />
+<text  x="1191.77" y="447.5" ></text>
+</g>
+<g >
+<title>parse_and_execute (40 samples, 0.06%)</title><rect x="1189.3" y="597" width="0.7" height="15.0" fill="rgb(237,55,37)" rx="2" ry="2" />
+<text  x="1192.31" y="607.5" ></text>
+</g>
+<g >
+<title>TLeafI::GetValue (96 samples, 0.13%)</title><rect x="1077.5" y="373" width="1.6" height="15.0" fill="rgb(244,119,41)" rx="2" ry="2" />
+<text  x="1080.49" y="383.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::ProxyReadTemplate&lt;&amp;ROOT::Detail::TBranchProxy::ReadNoParentNoBranchCountNoCollection&gt; (72 samples, 0.10%)</title><rect x="1168.9" y="373" width="1.2" height="15.0" fill="rgb(205,44,51)" rx="2" ry="2" />
+<text  x="1171.90" y="383.5" ></text>
+</g>
+<g >
+<title>?? (361 samples, 0.50%)</title><rect x="978.8" y="405" width="5.9" height="15.0" fill="rgb(225,24,46)" rx="2" ry="2" />
+<text  x="981.78" y="415.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::set_size (72 samples, 0.10%)</title><rect x="773.6" y="389" width="1.2" height="15.0" fill="rgb(240,141,7)" rx="2" ry="2" />
+<text  x="776.57" y="399.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::RVec&lt;float&gt;::operator[]&lt;int, std::enable_if&lt;true, void&gt; &gt; (1,792 samples, 2.50%)</title><rect x="865.8" y="421" width="29.5" height="15.0" fill="rgb(225,151,50)" rx="2" ry="2" />
+<text  x="868.80" y="431.5" >RO..</text>
+</g>
+<g >
+<title>TLeafF::ReadBasket (397 samples, 0.55%)</title><rect x="1072.5" y="389" width="6.6" height="15.0" fill="rgb(219,166,23)" rx="2" ry="2" />
+<text  x="1075.54" y="399.5" ></text>
+</g>
+<g >
+<title>execute_command (15 samples, 0.02%)</title><rect x="1188.8" y="373" width="0.3" height="15.0" fill="rgb(222,127,31)" rx="2" ry="2" />
+<text  x="1191.85" y="383.5" ></text>
+</g>
+<g >
+<title>TLeafI::GetValue (454 samples, 0.63%)</title><rect x="707.0" y="373" width="7.4" height="15.0" fill="rgb(233,227,10)" rx="2" ry="2" />
+<text  x="709.95" y="383.5" ></text>
+</g>
+<g >
+<title>[unknown] (12 samples, 0.02%)</title><rect x="1187.9" y="341" width="0.2" height="15.0" fill="rgb(244,161,14)" rx="2" ry="2" />
+<text  x="1190.89" y="351.5" ></text>
+</g>
+<g >
+<title>R__unzipZLIB (855 samples, 1.19%)</title><rect x="292.6" y="229" width="14.0" height="15.0" fill="rgb(212,168,38)" rx="2" ry="2" />
+<text  x="295.58" y="239.5" ></text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (17 samples, 0.02%)</title><rect x="1148.2" y="293" width="0.3" height="15.0" fill="rgb(251,4,48)" rx="2" ry="2" />
+<text  x="1151.20" y="303.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::set_size (29 samples, 0.04%)</title><rect x="75.2" y="453" width="0.5" height="15.0" fill="rgb(209,59,34)" rx="2" ry="2" />
+<text  x="78.24" y="463.5" ></text>
+</g>
+<g >
+<title>frombuf (71 samples, 0.10%)</title><rect x="646.0" y="325" width="1.1" height="15.0" fill="rgb(230,54,22)" rx="2" ry="2" />
+<text  x="648.98" y="335.5" ></text>
+</g>
+<g >
+<title>TLeafI::ReadBasket (120 samples, 0.17%)</title><rect x="1153.3" y="405" width="1.9" height="15.0" fill="rgb(241,62,46)" rx="2" ry="2" />
+<text  x="1156.27" y="415.5" ></text>
+</g>
+<g >
+<title>memcpy@plt (12 samples, 0.02%)</title><rect x="1181.0" y="453" width="0.2" height="15.0" fill="rgb(228,194,37)" rx="2" ry="2" />
+<text  x="1184.02" y="463.5" ></text>
+</g>
+<g >
+<title>free@plt (15 samples, 0.02%)</title><rect x="929.5" y="405" width="0.3" height="15.0" fill="rgb(252,95,31)" rx="2" ry="2" />
+<text  x="932.54" y="415.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress (1,964 samples, 2.74%)</title><rect x="1123.0" y="485" width="32.3" height="15.0" fill="rgb(205,58,45)" rx="2" ry="2" />
+<text  x="1125.95" y="495.5" >RO..</text>
+</g>
+<g >
+<title>TBranch::ReadLeaves1Impl (23 samples, 0.03%)</title><rect x="1069.8" y="373" width="0.4" height="15.0" fill="rgb(216,205,8)" rx="2" ry="2" />
+<text  x="1072.82" y="383.5" ></text>
+</g>
+<g >
+<title>_int_free (9 samples, 0.01%)</title><rect x="79.4" y="453" width="0.2" height="15.0" fill="rgb(250,20,26)" rx="2" ry="2" />
+<text  x="82.43" y="463.5" ></text>
+</g>
+<g >
+<title>[libz.so.1.2.11] (701 samples, 0.98%)</title><rect x="292.6" y="197" width="11.6" height="15.0" fill="rgb(211,49,8)" rx="2" ry="2" />
+<text  x="295.63" y="207.5" ></text>
+</g>
+<g >
+<title>TBranch::GetBasketImpl (17,816 samples, 24.84%)</title><rect x="357.7" y="373" width="293.1" height="15.0" fill="rgb(221,105,53)" rx="2" ry="2" />
+<text  x="360.70" y="383.5" >TBranch::GetBasketImpl</text>
+</g>
+<g >
+<title>TCling::LoadLibraryMap (11 samples, 0.02%)</title><rect x="1187.3" y="373" width="0.2" height="15.0" fill="rgb(210,126,3)" rx="2" ry="2" />
+<text  x="1190.34" y="383.5" ></text>
+</g>
+<g >
+<title>ROOT::RDF::RInterface&lt;ROOT::Detail::RDF::RLoopManager, void&gt;::GetValidatedColumnNames (7 samples, 0.01%)</title><rect x="1188.4" y="645" width="0.1" height="15.0" fill="rgb(233,2,30)" rx="2" ry="2" />
+<text  x="1191.42" y="655.5" ></text>
+</g>
+<g >
+<title>_int_free (24 samples, 0.03%)</title><rect x="136.2" y="421" width="0.4" height="15.0" fill="rgb(254,35,36)" rx="2" ry="2" />
+<text  x="139.18" y="431.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RLoopManager::RunTreeReader (914 samples, 1.27%)</title><rect x="11.3" y="533" width="15.0" height="15.0" fill="rgb(251,35,40)" rx="2" ry="2" />
+<text  x="14.27" y="543.5" ></text>
+</g>
+<g >
+<title>find_isolated_jets (10,695 samples, 14.91%)</title><rect x="774.9" y="437" width="175.9" height="15.0" fill="rgb(251,159,54)" rx="2" ry="2" />
+<text  x="777.87" y="447.5" >find_isolated_jets</text>
+</g>
+<g >
+<title>?? (40 samples, 0.06%)</title><rect x="1187.8" y="597" width="0.6" height="15.0" fill="rgb(208,154,40)" rx="2" ry="2" />
+<text  x="1190.76" y="607.5" ></text>
+</g>
+<g >
+<title>TUnixSystem::FindDynamicLibrary (40 samples, 0.06%)</title><rect x="1187.8" y="421" width="0.6" height="15.0" fill="rgb(237,87,46)" rx="2" ry="2" />
+<text  x="1190.76" y="431.5" ></text>
+</g>
+<g >
+<title>?? (7 samples, 0.01%)</title><rect x="1188.6" y="533" width="0.1" height="15.0" fill="rgb(216,3,0)" rx="2" ry="2" />
+<text  x="1191.60" y="543.5" ></text>
+</g>
+<g >
+<title>execute_command (9 samples, 0.01%)</title><rect x="1188.8" y="197" width="0.2" height="15.0" fill="rgb(248,123,21)" rx="2" ry="2" />
+<text  x="1191.85" y="207.5" ></text>
+</g>
+<g >
+<title>_start (71,560 samples, 99.75%)</title><rect x="10.4" y="661" width="1177.1" height="15.0" fill="rgb(213,72,38)" rx="2" ry="2" />
+<text  x="13.43" y="671.5" >_start</text>
+</g>
+<g >
+<title>ROOT::VecOps::RVecN&lt;ROOT::VecOps::RVec&lt;unsigned long&gt;, 8u&gt;::RVecN (1,804 samples, 2.51%)</title><rect x="895.3" y="421" width="29.7" height="15.0" fill="rgb(205,34,48)" rx="2" ry="2" />
+<text  x="898.28" y="431.5" >RO..</text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::grow_pod (55 samples, 0.08%)</title><rect x="1111.4" y="389" width="0.9" height="15.0" fill="rgb(220,121,48)" rx="2" ry="2" />
+<text  x="1114.44" y="399.5" ></text>
+</g>
+<g >
+<title>adler32_z (151 samples, 0.21%)</title><rect x="304.2" y="197" width="2.4" height="15.0" fill="rgb(214,122,8)" rx="2" ry="2" />
+<text  x="307.16" y="207.5" ></text>
+</g>
+<g >
+<title>TTreeCache::ReadBufferNormal (72 samples, 0.10%)</title><rect x="1064.1" y="341" width="1.1" height="15.0" fill="rgb(208,20,40)" rx="2" ry="2" />
+<text  x="1067.06" y="351.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::RVec&lt;float&gt;::operator[]&lt;int, std::enable_if&lt;true, void&gt; &gt; (540 samples, 0.75%)</title><rect x="1173.1" y="485" width="8.9" height="15.0" fill="rgb(218,141,22)" rx="2" ry="2" />
+<text  x="1176.09" y="495.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::ProxyReadTemplate&lt;&amp;ROOT::Detail::TBranchProxy::ReadNoParentNoBranchCountNoCollection&gt; (4,578 samples, 6.38%)</title><rect x="244.6" y="341" width="75.3" height="15.0" fill="rgb(211,68,16)" rx="2" ry="2" />
+<text  x="247.57" y="351.5" >ROOT::In..</text>
+</g>
+<g >
+<title>ROOT::Detail::VecOps::RVecImpl&lt;int&gt;::operator= (1,169 samples, 1.63%)</title><rect x="117.7" y="437" width="19.3" height="15.0" fill="rgb(225,209,46)" rx="2" ry="2" />
+<text  x="120.74" y="447.5" ></text>
+</g>
+<g >
+<title>TCling::Initialize (11 samples, 0.02%)</title><rect x="1187.3" y="405" width="0.2" height="15.0" fill="rgb(219,103,36)" rx="2" ry="2" />
+<text  x="1190.34" y="415.5" ></text>
+</g>
+<g >
+<title>inflate (855 samples, 1.19%)</title><rect x="292.6" y="213" width="14.0" height="15.0" fill="rgb(223,156,42)" rx="2" ry="2" />
+<text  x="295.58" y="223.5" ></text>
+</g>
+<g >
+<title>inflate (17,318 samples, 24.14%)</title><rect x="357.8" y="309" width="284.9" height="15.0" fill="rgb(220,164,42)" rx="2" ry="2" />
+<text  x="360.79" y="319.5" >inflate</text>
+</g>
+<g >
+<title>?? (40 samples, 0.06%)</title><rect x="1187.8" y="517" width="0.6" height="15.0" fill="rgb(215,70,15)" rx="2" ry="2" />
+<text  x="1190.76" y="527.5" ></text>
+</g>
+<g >
+<title>[unknown] (17 samples, 0.02%)</title><rect x="1189.6" y="501" width="0.3" height="15.0" fill="rgb(212,71,27)" rx="2" ry="2" />
+<text  x="1192.64" y="511.5" ></text>
+</g>
+<g >
+<title>TROOT::InitInterpreter (7 samples, 0.01%)</title><rect x="1188.6" y="469" width="0.1" height="15.0" fill="rgb(246,212,39)" rx="2" ry="2" />
+<text  x="1191.60" y="479.5" ></text>
+</g>
+<g >
+<title>make_child (10 samples, 0.01%)</title><rect x="1189.3" y="517" width="0.2" height="15.0" fill="rgb(231,58,46)" rx="2" ry="2" />
+<text  x="1192.33" y="527.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::set_size (32 samples, 0.04%)</title><rect x="963.6" y="421" width="0.5" height="15.0" fill="rgb(206,203,27)" rx="2" ry="2" />
+<text  x="966.59" y="431.5" ></text>
+</g>
+<g >
+<title>TBranch::GetEntry (93 samples, 0.13%)</title><rect x="306.8" y="293" width="1.5" height="15.0" fill="rgb(209,129,11)" rx="2" ry="2" />
+<text  x="309.78" y="303.5" ></text>
+</g>
+<g >
+<title>sh (45 samples, 0.06%)</title><rect x="1189.3" y="677" width="0.7" height="15.0" fill="rgb(240,54,33)" rx="2" ry="2" />
+<text  x="1192.26" y="687.5" ></text>
+</g>
+<g >
+<title>TLeafI::GetValue (48 samples, 0.07%)</title><rect x="1078.3" y="357" width="0.8" height="15.0" fill="rgb(217,40,50)" rx="2" ry="2" />
+<text  x="1081.28" y="367.5" ></text>
+</g>
+<g >
+<title>TFileCacheRead::ReadBufferExtNormal (72 samples, 0.10%)</title><rect x="1064.1" y="309" width="1.1" height="15.0" fill="rgb(244,9,48)" rx="2" ry="2" />
+<text  x="1067.06" y="319.5" ></text>
+</g>
+<g >
+<title>?? (347 samples, 0.48%)</title><rect x="979.0" y="389" width="5.7" height="15.0" fill="rgb(243,59,38)" rx="2" ry="2" />
+<text  x="982.01" y="399.5" ></text>
+</g>
+<g >
+<title>TFileCacheRead::ReadBufferExtNormal (214 samples, 0.30%)</title><rect x="647.2" y="309" width="3.5" height="15.0" fill="rgb(247,150,28)" rx="2" ry="2" />
+<text  x="650.18" y="319.5" ></text>
+</g>
+<g >
+<title>TBranch::GetEntry (1,413 samples, 1.97%)</title><rect x="1132.0" y="421" width="23.2" height="15.0" fill="rgb(235,108,0)" rx="2" ry="2" />
+<text  x="1135.00" y="431.5" >T..</text>
+</g>
+<g >
+<title>__GI___libc_malloc (189 samples, 0.26%)</title><rect x="859.9" y="405" width="3.1" height="15.0" fill="rgb(214,45,20)" rx="2" ry="2" />
+<text  x="862.88" y="415.5" ></text>
+</g>
+<g >
+<title>TH1D::AddBinContent (108 samples, 0.15%)</title><rect x="1185.5" y="501" width="1.7" height="15.0" fill="rgb(227,45,19)" rx="2" ry="2" />
+<text  x="1188.46" y="511.5" ></text>
+</g>
+<g >
+<title>[libz.so.1.2.11] (472 samples, 0.66%)</title><rect x="1139.3" y="309" width="7.8" height="15.0" fill="rgb(228,198,23)" rx="2" ry="2" />
+<text  x="1142.32" y="319.5" ></text>
+</g>
+<g >
+<title>main (71,559 samples, 99.75%)</title><rect x="10.4" y="629" width="1177.1" height="15.0" fill="rgb(216,226,44)" rx="2" ry="2" />
+<text  x="13.44" y="639.5" >main</text>
+</g>
+<g >
+<title>TChain::LoadTree (537 samples, 0.75%)</title><rect x="17.2" y="501" width="8.8" height="15.0" fill="rgb(216,60,48)" rx="2" ry="2" />
+<text  x="20.20" y="511.5" ></text>
+</g>
+<g >
+<title>?? (7 samples, 0.01%)</title><rect x="1188.6" y="581" width="0.1" height="15.0" fill="rgb(241,162,8)" rx="2" ry="2" />
+<text  x="1191.60" y="591.5" ></text>
+</g>
+<g >
+<title>expand_string_assignment (9 samples, 0.01%)</title><rect x="1188.8" y="101" width="0.2" height="15.0" fill="rgb(225,91,6)" rx="2" ry="2" />
+<text  x="1191.85" y="111.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::RTreeColumnReader&lt;ROOT::VecOps::RVec&lt;float&gt; &gt;::GetImpl (593 samples, 0.83%)</title><rect x="1163.3" y="485" width="9.8" height="15.0" fill="rgb(249,173,7)" rx="2" ry="2" />
+<text  x="1166.34" y="495.5" ></text>
+</g>
+<g >
+<title>TBranch::ReadLeaves1Impl (70 samples, 0.10%)</title><rect x="1149.7" y="405" width="1.2" height="15.0" fill="rgb(231,160,17)" rx="2" ry="2" />
+<text  x="1152.70" y="415.5" ></text>
+</g>
+<g >
+<title>[bash] (9 samples, 0.01%)</title><rect x="1188.8" y="69" width="0.2" height="15.0" fill="rgb(242,111,11)" rx="2" ry="2" />
+<text  x="1191.85" y="79.5" ></text>
+</g>
+<g >
+<title>R__unzip (855 samples, 1.19%)</title><rect x="292.6" y="245" width="14.0" height="15.0" fill="rgb(215,34,51)" rx="2" ry="2" />
+<text  x="295.58" y="255.5" ></text>
+</g>
+<g >
+<title>execute_command (10 samples, 0.01%)</title><rect x="1188.8" y="261" width="0.2" height="15.0" fill="rgb(206,143,22)" rx="2" ry="2" />
+<text  x="1191.85" y="271.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::RVecN&lt;ROOT::VecOps::RVec&lt;unsigned long&gt;, 8u&gt;::~RVecN (294 samples, 0.41%)</title><rect x="925.0" y="421" width="4.8" height="15.0" fill="rgb(228,158,50)" rx="2" ry="2" />
+<text  x="927.95" y="431.5" ></text>
+</g>
+<g >
+<title>_int_free (74 samples, 0.10%)</title><rect x="928.3" y="405" width="1.2" height="15.0" fill="rgb(247,188,3)" rx="2" ry="2" />
+<text  x="931.33" y="415.5" ></text>
+</g>
+<g >
+<title>?? (914 samples, 1.27%)</title><rect x="11.3" y="549" width="15.0" height="15.0" fill="rgb(222,220,53)" rx="2" ry="2" />
+<text  x="14.27" y="559.5" ></text>
+</g>
+<g >
+<title>TTreeReader::SetEntryBase (901 samples, 1.26%)</title><rect x="11.4" y="517" width="14.9" height="15.0" fill="rgb(226,219,43)" rx="2" ry="2" />
+<text  x="14.43" y="527.5" ></text>
+</g>
+<g >
+<title>memcpy@plt (63 samples, 0.09%)</title><rect x="893.1" y="389" width="1.1" height="15.0" fill="rgb(221,117,4)" rx="2" ry="2" />
+<text  x="896.12" y="399.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::set_size (137 samples, 0.19%)</title><rect x="863.5" y="421" width="2.3" height="15.0" fill="rgb(244,132,44)" rx="2" ry="2" />
+<text  x="866.55" y="431.5" ></text>
+</g>
+<g >
+<title>__memcpy_avx_unaligned (56 samples, 0.08%)</title><rect x="964.2" y="421" width="0.9" height="15.0" fill="rgb(229,94,23)" rx="2" ry="2" />
+<text  x="967.17" y="431.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::set_size (64 samples, 0.09%)</title><rect x="888.1" y="389" width="1.0" height="15.0" fill="rgb(213,60,31)" rx="2" ry="2" />
+<text  x="891.06" y="399.5" ></text>
+</g>
+<g >
+<title>memcpy@plt (10 samples, 0.01%)</title><rect x="863.2" y="405" width="0.2" height="15.0" fill="rgb(218,182,50)" rx="2" ry="2" />
+<text  x="866.19" y="415.5" ></text>
+</g>
+<g >
+<title>[bash] (9 samples, 0.01%)</title><rect x="1188.8" y="117" width="0.2" height="15.0" fill="rgb(254,98,29)" rx="2" ry="2" />
+<text  x="1191.85" y="127.5" ></text>
+</g>
+<g >
+<title>execute_command (20 samples, 0.03%)</title><rect x="1188.8" y="597" width="0.3" height="15.0" fill="rgb(215,219,17)" rx="2" ry="2" />
+<text  x="1191.77" y="607.5" ></text>
+</g>
+<g >
+<title>std::swap&lt;ROOT::VecOps::RVec&lt;float&gt; &gt; (3,407 samples, 4.75%)</title><rect x="718.8" y="421" width="56.0" height="15.0" fill="rgb(244,157,32)" rx="2" ry="2" />
+<text  x="721.80" y="431.5" >std::..</text>
+</g>
+<g >
+<title>TChain::GetListOfBranches (7 samples, 0.01%)</title><rect x="1188.4" y="581" width="0.1" height="15.0" fill="rgb(223,212,15)" rx="2" ry="2" />
+<text  x="1191.42" y="591.5" ></text>
+</g>
+<g >
+<title>TLeafI::GetValue (228 samples, 0.32%)</title><rect x="710.7" y="357" width="3.7" height="15.0" fill="rgb(242,218,23)" rx="2" ry="2" />
+<text  x="713.67" y="367.5" ></text>
+</g>
+<g >
+<title>?? (366 samples, 0.51%)</title><rect x="1094.4" y="453" width="6.0" height="15.0" fill="rgb(208,160,5)" rx="2" ry="2" />
+<text  x="1097.40" y="463.5" ></text>
+</g>
+<g >
+<title>TFileCacheRead::ReadBuffer (72 samples, 0.10%)</title><rect x="1064.1" y="325" width="1.1" height="15.0" fill="rgb(216,21,36)" rx="2" ry="2" />
+<text  x="1067.06" y="335.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::set_size (23 samples, 0.03%)</title><rect x="1181.6" y="469" width="0.4" height="15.0" fill="rgb(247,70,48)" rx="2" ry="2" />
+<text  x="1184.59" y="479.5" ></text>
+</g>
+<g >
+<title>R__unzip (17,323 samples, 24.15%)</title><rect x="357.8" y="341" width="284.9" height="15.0" fill="rgb(221,30,4)" rx="2" ry="2" />
+<text  x="360.79" y="351.5" >R__unzip</text>
+</g>
+<g >
+<title>TTree::LoadTree (177 samples, 0.25%)</title><rect x="23.1" y="485" width="2.9" height="15.0" fill="rgb(253,24,9)" rx="2" ry="2" />
+<text  x="26.13" y="495.5" ></text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (66 samples, 0.09%)</title><rect x="1179.9" y="453" width="1.1" height="15.0" fill="rgb(250,115,25)" rx="2" ry="2" />
+<text  x="1182.93" y="463.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress@plt (19 samples, 0.03%)</title><rect x="1155.3" y="485" width="0.3" height="15.0" fill="rgb(215,172,1)" rx="2" ry="2" />
+<text  x="1158.26" y="495.5" ></text>
+</g>
+<g >
+<title>?? (78 samples, 0.11%)</title><rect x="1110.0" y="389" width="1.3" height="15.0" fill="rgb(206,210,30)" rx="2" ry="2" />
+<text  x="1113.02" y="399.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RLoopManager::RunTreeReader (71,546 samples, 99.74%)</title><rect x="10.4" y="565" width="1176.9" height="15.0" fill="rgb(251,79,25)" rx="2" ry="2" />
+<text  x="13.44" y="575.5" >ROOT::Detail::RDF::RLoopManager::RunTreeReader</text>
+</g>
+<g >
+<title>ROOT::Internal::VecOps::SmallVectorBase::grow_pod@plt (12 samples, 0.02%)</title><rect x="863.4" y="421" width="0.1" height="15.0" fill="rgb(251,34,13)" rx="2" ry="2" />
+<text  x="866.35" y="431.5" ></text>
+</g>
+<g >
+<title>[unknown] (8 samples, 0.01%)</title><rect x="1188.0" y="309" width="0.1" height="15.0" fill="rgb(249,197,6)" rx="2" ry="2" />
+<text  x="1190.96" y="319.5" ></text>
+</g>
+<g >
+<title>TCling::Initialize (11 samples, 0.02%)</title><rect x="1187.3" y="389" width="0.2" height="15.0" fill="rgb(235,61,43)" rx="2" ry="2" />
+<text  x="1190.34" y="399.5" ></text>
+</g>
+<g >
+<title>__memset_avx2_unaligned (43 samples, 0.06%)</title><rect x="935.6" y="405" width="0.8" height="15.0" fill="rgb(223,228,50)" rx="2" ry="2" />
+<text  x="938.65" y="415.5" ></text>
+</g>
+<g >
+<title>[bash] (9 samples, 0.01%)</title><rect x="1188.8" y="165" width="0.2" height="15.0" fill="rgb(218,92,37)" rx="2" ry="2" />
+<text  x="1191.85" y="175.5" ></text>
+</g>
+<g >
+<title>reader_loop (20 samples, 0.03%)</title><rect x="1188.8" y="613" width="0.3" height="15.0" fill="rgb(219,88,26)" rx="2" ry="2" />
+<text  x="1191.77" y="623.5" ></text>
+</g>
+<g >
+<title>?? (7 samples, 0.01%)</title><rect x="1188.6" y="549" width="0.1" height="15.0" fill="rgb(254,11,20)" rx="2" ry="2" />
+<text  x="1191.60" y="559.5" ></text>
+</g>
+<g >
+<title>?? (40 samples, 0.06%)</title><rect x="1187.8" y="533" width="0.6" height="15.0" fill="rgb(249,141,31)" rx="2" ry="2" />
+<text  x="1190.76" y="543.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress (1,774 samples, 2.47%)</title><rect x="1126.1" y="469" width="29.1" height="15.0" fill="rgb(225,226,32)" rx="2" ry="2" />
+<text  x="1129.06" y="479.5" >RO..</text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (149 samples, 0.21%)</title><rect x="890.7" y="389" width="2.4" height="15.0" fill="rgb(225,176,37)" rx="2" ry="2" />
+<text  x="893.67" y="399.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::RVecN&lt;int, 12u&gt;::RVecN (310 samples, 0.43%)</title><rect x="1109.1" y="437" width="5.1" height="15.0" fill="rgb(243,163,41)" rx="2" ry="2" />
+<text  x="1112.07" y="447.5" ></text>
+</g>
+<g >
+<title>?? (76 samples, 0.11%)</title><rect x="1070.6" y="373" width="1.3" height="15.0" fill="rgb(234,67,49)" rx="2" ry="2" />
+<text  x="1073.61" y="383.5" ></text>
+</g>
+<g >
+<title>__memcpy_avx_unaligned (36 samples, 0.05%)</title><rect x="75.9" y="453" width="0.6" height="15.0" fill="rgb(253,1,11)" rx="2" ry="2" />
+<text  x="78.86" y="463.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress (4,717 samples, 6.58%)</title><rect x="242.3" y="357" width="77.6" height="15.0" fill="rgb(241,117,42)" rx="2" ry="2" />
+<text  x="245.28" y="367.5" >ROOT::In..</text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RDefine&lt;query7(char const*)::{lambda(ROOT::VecOps::RVec&lt;int&gt; const&amp;, ROOT::VecOps::RVec&lt;float&gt; const&amp;)#5}, ROOT::Detail::RDF::CustomColExtraArgs::None&gt;::Update (1,572 samples, 2.19%)</title><rect x="1156.3" y="501" width="25.9" height="15.0" fill="rgb(241,8,54)" rx="2" ry="2" />
+<text  x="1159.34" y="511.5" >R..</text>
+</g>
+<g >
+<title>ROOT::VecOps::RVecN&lt;int, 12u&gt;::RVecN (78 samples, 0.11%)</title><rect x="1110.0" y="373" width="1.3" height="15.0" fill="rgb(242,151,33)" rx="2" ry="2" />
+<text  x="1113.02" y="383.5" ></text>
+</g>
+<g >
+<title>?? (7 samples, 0.01%)</title><rect x="1188.6" y="597" width="0.1" height="15.0" fill="rgb(245,172,4)" rx="2" ry="2" />
+<text  x="1191.60" y="607.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RDefine&lt;query7(char const*)::{lambda(ROOT::VecOps::RVec&lt;int&gt; const&amp;, ROOT::VecOps::RVec&lt;int&gt; const&amp;, ROOT::VecOps::RVec&lt;int&gt; const&amp;)#3}, ROOT::Detail::RDF::CustomColExtraArgs::None&gt;::Update (43 samples, 0.06%)</title><rect x="1162.6" y="469" width="0.7" height="15.0" fill="rgb(243,23,31)" rx="2" ry="2" />
+<text  x="1165.63" y="479.5" ></text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (214 samples, 0.30%)</title><rect x="647.2" y="293" width="3.5" height="15.0" fill="rgb(247,99,52)" rx="2" ry="2" />
+<text  x="650.18" y="303.5" ></text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RLoopManager::RunAndCheckFilters (38 samples, 0.05%)</title><rect x="30.2" y="517" width="0.6" height="15.0" fill="rgb(239,223,31)" rx="2" ry="2" />
+<text  x="33.22" y="527.5" ></text>
+</g>
+<g >
+<title>__libc_start_main (42 samples, 0.06%)</title><rect x="1189.3" y="645" width="0.7" height="15.0" fill="rgb(208,77,42)" rx="2" ry="2" />
+<text  x="1192.31" y="655.5" ></text>
+</g>
+<g >
+<title>execute_command_internal (20 samples, 0.03%)</title><rect x="1188.8" y="501" width="0.3" height="15.0" fill="rgb(224,225,17)" rx="2" ry="2" />
+<text  x="1191.77" y="511.5" ></text>
+</g>
+<g >
+<title>TBranch::ReadLeaves1Impl (623 samples, 0.87%)</title><rect x="661.9" y="389" width="10.2" height="15.0" fill="rgb(254,166,31)" rx="2" ry="2" />
+<text  x="664.90" y="399.5" ></text>
+</g>
+<g >
+<title>?? (13 samples, 0.02%)</title><rect x="1187.3" y="533" width="0.2" height="15.0" fill="rgb(250,155,52)" rx="2" ry="2" />
+<text  x="1190.32" y="543.5" ></text>
+</g>
+<g >
+<title>DynamicPath (10 samples, 0.01%)</title><rect x="1187.3" y="357" width="0.2" height="15.0" fill="rgb(245,148,44)" rx="2" ry="2" />
+<text  x="1190.34" y="367.5" ></text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (181 samples, 0.25%)</title><rect x="76.5" y="453" width="2.9" height="15.0" fill="rgb(210,81,15)" rx="2" ry="2" />
+<text  x="79.45" y="463.5" ></text>
+</g>
+<g >
+<title>ROOT::VecOps::operator&amp;&amp;&lt;int, int&gt;(ROOT::VecOps::RVec&lt;int&gt; const&amp;, ROOT::VecOps::RVec&lt;int&gt; const&amp;)::{lambda(int const&amp;, int const&amp;)#1}::operator() (360 samples, 0.50%)</title><rect x="1094.5" y="437" width="5.9" height="15.0" fill="rgb(250,122,32)" rx="2" ry="2" />
+<text  x="1097.50" y="447.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress (109 samples, 0.15%)</title><rect x="1168.3" y="405" width="1.8" height="15.0" fill="rgb(235,177,29)" rx="2" ry="2" />
+<text  x="1171.29" y="415.5" ></text>
+</g>
+<g >
+<title>[unknown] (8 samples, 0.01%)</title><rect x="1188.0" y="293" width="0.1" height="15.0" fill="rgb(254,30,26)" rx="2" ry="2" />
+<text  x="1190.96" y="303.5" ></text>
+</g>
+<g >
+<title>TBasket::ReadBasketBuffers (862 samples, 1.20%)</title><rect x="292.6" y="261" width="14.2" height="15.0" fill="rgb(249,115,4)" rx="2" ry="2" />
+<text  x="295.58" y="271.5" ></text>
+</g>
+<g >
+<title>TLeafI::GetMaximum (7 samples, 0.01%)</title><rect x="1077.4" y="373" width="0.1" height="15.0" fill="rgb(247,187,1)" rx="2" ry="2" />
+<text  x="1080.37" y="383.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::RDefineReader::GetImpl (64,624 samples, 90.09%)</title><rect x="55.8" y="501" width="1063.0" height="15.0" fill="rgb(216,85,35)" rx="2" ry="2" />
+<text  x="58.81" y="511.5" >ROOT::Internal::RDF::RDefineReader::GetImpl</text>
+</g>
+<g >
+<title>ROOT::RDF::RResultPtr&lt;TH1D&gt;::Get (71,546 samples, 99.74%)</title><rect x="10.4" y="597" width="1176.9" height="15.0" fill="rgb(232,90,13)" rx="2" ry="2" />
+<text  x="13.44" y="607.5" >ROOT::RDF::RResultPtr&lt;TH1D&gt;::Get</text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::GetAddress (160 samples, 0.22%)</title><rect x="1167.5" y="421" width="2.6" height="15.0" fill="rgb(249,60,16)" rx="2" ry="2" />
+<text  x="1170.46" y="431.5" ></text>
+</g>
+<g >
+<title>query7 (71,559 samples, 99.75%)</title><rect x="10.4" y="613" width="1177.1" height="15.0" fill="rgb(227,81,50)" rx="2" ry="2" />
+<text  x="13.44" y="623.5" >query7</text>
+</g>
+<g >
+<title>TBasket::ReadBasketBuffers (4,633 samples, 6.46%)</title><rect x="989.0" y="357" width="76.2" height="15.0" fill="rgb(231,127,27)" rx="2" ry="2" />
+<text  x="992.04" y="367.5" >TBasket:..</text>
+</g>
+<g >
+<title>TBranch::GetBasketImpl (578 samples, 0.81%)</title><rect x="1139.3" y="389" width="9.5" height="15.0" fill="rgb(214,158,13)" rx="2" ry="2" />
+<text  x="1142.30" y="399.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::TTreeReaderValueBase::ProxyReadTemplate&lt;&amp;ROOT::Detail::TBranchProxy::ReadNoParentNoBranchCountNoCollection&gt; (1,612 samples, 2.25%)</title><rect x="1128.7" y="437" width="26.5" height="15.0" fill="rgb(245,99,19)" rx="2" ry="2" />
+<text  x="1131.73" y="447.5" >R..</text>
+</g>
+<g >
+<title>__libc_start_main (20 samples, 0.03%)</title><rect x="1188.8" y="645" width="0.3" height="15.0" fill="rgb(244,225,37)" rx="2" ry="2" />
+<text  x="1191.77" y="655.5" ></text>
+</g>
+<g >
+<title>frombuf (271 samples, 0.38%)</title><rect x="311.8" y="277" width="4.5" height="15.0" fill="rgb(210,55,24)" rx="2" ry="2" />
+<text  x="314.79" y="287.5" ></text>
+</g>
+<g >
+<title>ROOT::Internal::RDF::RTreeColumnReader&lt;ROOT::VecOps::RVec&lt;float&gt; &gt;::GetImpl (7,253 samples, 10.11%)</title><rect x="967.4" y="437" width="119.3" height="15.0" fill="rgb(208,15,3)" rx="2" ry="2" />
+<text  x="970.43" y="447.5" >ROOT::Internal..</text>
+</g>
+<g >
+<title>TBufferFile::ReadFastArray (552 samples, 0.77%)</title><rect x="672.1" y="389" width="9.1" height="15.0" fill="rgb(211,162,46)" rx="2" ry="2" />
+<text  x="675.15" y="399.5" ></text>
+</g>
+<g >
+<title>?? (6,165 samples, 8.59%)</title><rect x="978.1" y="421" width="101.4" height="15.0" fill="rgb(253,27,18)" rx="2" ry="2" />
+<text  x="981.13" y="431.5" >??</text>
+</g>
+<g >
+<title>?? (142 samples, 0.20%)</title><rect x="1110.0" y="421" width="2.4" height="15.0" fill="rgb(213,101,11)" rx="2" ry="2" />
+<text  x="1113.02" y="431.5" ></text>
+</g>
+<g >
+<title>TBranch::GetEntry (2,374 samples, 3.31%)</title><rect x="280.8" y="309" width="39.1" height="15.0" fill="rgb(214,125,42)" rx="2" ry="2" />
+<text  x="283.80" y="319.5" >TBr..</text>
+</g>
+<g >
+<title>ROOT::Detail::RDF::RFilter&lt;query7(char const*)::{lambda(unsigned int)#1}, ROOT::Detail::RDF::RLoopManager&gt;::CheckFilters (219 samples, 0.31%)</title><rect x="30.8" y="533" width="3.6" height="15.0" fill="rgb(206,42,3)" rx="2" ry="2" />
+<text  x="33.84" y="543.5" ></text>
+</g>
+</g>
+</svg>
