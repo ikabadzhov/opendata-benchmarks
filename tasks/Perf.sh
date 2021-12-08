@@ -11,20 +11,20 @@ do
 	esac
 done
 
-FILEN="\"/data/ssdext4/ikabadzh/ODB/Run2012B_SingleMu.root\""
+FILEN="/data/ssdext4/ikabadzh/ODB/Run2012B_SingleMu.root"
 
 if [ "${filesnum}" -eq "10" ];
 then
-	FILEN="\"/data/ssdext4/ikabadzh/ODB/Run2012B_SingleMu*.root\""
+	FILEN="/data/ssdext4/ikabadzh/ODB/Run2012B_SingleMu*.root"
 fi
 
 if [ "${jitted}" -eq "0" ];
 then
 	g++ -O3 $(root-config --cflags --libs) compiled.cxx -o cmpl
-	perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf ./cmpl ${cores} ${FILEN} ${query}
+	perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf ./cmpl ${cores} "${FILEN}" ${query}
 	rm cmpl
 else
-	perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf root -l -b -q "jitted.C(${cores},${FILEN},${query})"
+	perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf root -l -b -q "jitted.C(${cores},\"${FILEN}\",${query})"
 fi
 
 perf script -i "../../OPENreportsD/${query}/${namerep}.data" | ~/FlameGraph/stackcollapse-perf.pl >  ~/perf_reps/out.perf-folded

@@ -1,6 +1,6 @@
-template <typename T> using Vec = const RVec<T>&;
-using FourVector = Math::PtEtaPhiMVector;
-using Math::XYZTVector;
+template <typename T> using Vec = const ROOT::RVec<T>&;
+using FourVector = ROOT::Math::PtEtaPhiMVector;
+using ROOT::Math::XYZTVector;
 
 double query1(const char * f);
 double query2(const char * f);
@@ -11,7 +11,7 @@ double query6(const char * f);
 double query7(const char * f);
 double query8(const char * f);
 
-void jitted(int cores, const char * f, int query){
+void jitted(int ncores, const char * f, int query){
     if ( ncores > 1 ) { 
         ROOT::EnableImplicitMT(ncores); 
     }
@@ -22,28 +22,28 @@ void jitted(int cores, const char * f, int query){
 
     switch(query){
     case 1:
-        query1(filename);
+        query1(f);
         break;
     case 2:
-        query2(filename);
+        query2(f);
         break;
     case 3:
-        query3(filename);
+        query3(f);
         break;
     case 4:
-        query4(filename);
+        query4(f);
         break;
     case 5:
-        query5(filename);
+        query5(f);
         break;
     case 6:
-        query6(filename);
+        query6(f);
         break;
     case 7:
-        query7(filename);
+        query7(f);
         break;
     case 8:
-        query8(filename);
+        query8(f);
         break;
     default:
         std::cout << "Invalid query" << std::endl;
@@ -53,7 +53,7 @@ void jitted(int cores, const char * f, int query){
     std::ofstream outf;
     outf.open("reports/LOG.txt", std::ios::app);
     int nf = 1;
-    if (((std::string)filename).find('*') != std::string::npos) nf = 10;
+    if (((std::string)f).find('*') != std::string::npos) nf = 10;
     outf << "JIT:: Q:" << query << ", C:" << ncores
          << ", T:" <<  StopWatch.RealTime()
          <<", F:" << nf << std::endl;
@@ -109,9 +109,6 @@ auto compute_dimuon_masses(Vec<float> pt, Vec<float> eta, Vec<float> phi, Vec<fl
 };
 
 double query5(const char * f) {
-    if ( ncores > 1 ) {
-        ROOT::EnableImplicitMT(ncores);
-    }
     ROOT::RDataFrame df("Events", f);
     auto h = df.Filter("nMuon >= 2", "At least two muons")
                .Define("Dimuon_mass", compute_dimuon_masses, {"Muon_pt", "Muon_eta", "Muon_phi", "Muon_mass", "Muon_charge"})
@@ -154,9 +151,6 @@ float trijet_pt(Vec<float> pt, Vec<float> eta, Vec<float> phi, Vec<float> mass, 
 
 
 double query6(const char * f) {
-    if ( ncores > 1 ) {
-        ROOT::EnableImplicitMT(ncores);
-    }
     using ROOT::Math::PtEtaPhiMVector;
     using ROOT::VecOps::Construct;
 
@@ -199,9 +193,6 @@ ROOT::RVec<int> find_isolated_jets(Vec<float> eta1, Vec<float> phi1, Vec<float> 
 }
 
 double query7(const char * f) {
-    if ( ncores > 1 ) {
-        ROOT::EnableImplicitMT(ncores);
-    }
     ROOT::RDataFrame df("Events", f);
     auto h = df.Filter("nJet > 0", "At least one jet")
                .Define("goodJet_ptcut", "Jet_pt > 30")
@@ -256,9 +247,6 @@ unsigned int additional_lepton_idx(Vec<float> pt, Vec<float> eta, Vec<float> phi
 }
 
 double query8(const char * f) {
-    if ( ncores > 1 ) {
-        ROOT::EnableImplicitMT(ncores);
-    }
     ROOT::RDataFrame df("Events", f);
     auto h = df.Filter("nElectron + nMuon > 2", "At least three leptons")
                .Define("Lepton_pt", "Concatenate(Muon_pt, Electron_pt)")
