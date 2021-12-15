@@ -75,7 +75,7 @@ using ROOT::Math::XYZTVector;
 
 ROOT::RVec<std::size_t> find_trijet(Vec<XYZTVector> jets) {
   const auto c = ROOT::VecOps::Combinations(jets, 3);
-
+  //std::cout << c[0].size() << std::endl;
   float distance = 1e9;
   const auto top_mass = 172.5;
   std::size_t idx = 0;
@@ -90,7 +90,7 @@ ROOT::RVec<std::size_t> find_trijet(Vec<XYZTVector> jets) {
       idx = i;
     }
   }
-
+  //std::cout << "i->" << idx << std::endl;
   return {c[0][idx], c[1][idx], c[2][idx]};
 }
 
@@ -136,6 +136,7 @@ ROOT::RVec<int> find_isolated_jets(Vec<float> eta1, Vec<float> phi1, Vec<float> 
     }
 
     const auto c = ROOT::VecOps::Combinations(eta1, eta2_ptcut);
+    //std::cout << c << "\n\n";
     for (auto i = 0; i < c[0].size(); i++) {
         const auto i1 = c[0][i];
         const auto i2 = c[1][i];
@@ -287,9 +288,9 @@ int main(int argc, const char ** argv) {
 
     StopWatch.Stop();
     std::ofstream outf;
-    outf.open("reports/LOG.txt", std::ios::app);
+    outf.open("reports/LOG4.txt", std::ios::app);
     int nf = 1;
-    if (((std::string)filename).find('*') != std::string::npos) nf = 10;
+    if (((std::string)filename).find('*') != std::string::npos) nf = 100;
     outf << "CMP:: Q:" << query << ", C:" << ncores
          << ", T:" <<  StopWatch.RealTime()
          <<", F:" << nf << std::endl;
