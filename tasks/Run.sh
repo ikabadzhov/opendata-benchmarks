@@ -24,7 +24,7 @@ then
 	./cmpl ${cores} "${FILEN}" ${query}
 	rm cmpl
 else
-	root -l -b -q "jitted.C(${cores},\"${FILEN}\",${query})"
+	EXTRA_CLING_ARGS="-O3" root -l -b -q "jitted.C(${cores},\"${FILEN}\",${query})"
 fi
 
 #perf script -i "../../OPENreportsD/${query}/${namerep}.data" | ~/FlameGraph/stackcollapse-perf.pl >  ~/perf_reps/out.perf-folded

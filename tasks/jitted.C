@@ -51,7 +51,7 @@ void jitted(int ncores, const char * f, int query){
 
     StopWatch.Stop();
     std::ofstream outf;
-    outf.open("reports/LOG3.txt", std::ios::app);
+    outf.open("reports/LOG5.txt", std::ios::app);
     int nf = 1;
     if (((std::string)f).find('*') != std::string::npos) nf = 10;
     outf << "JIT:: Q:" << query << ", C:" << ncores
