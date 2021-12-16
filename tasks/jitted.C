@@ -1,9 +1,3 @@
-#include "ROOT/RDataFrame.hxx"
-#include "ROOT/RVec.hxx"
-#include "Math/Vector4D.h"
-#include "TStopwatch.h"
-#include <fstream>
-
 template <typename T> using Vec = const ROOT::RVec<T>&;
 using FourVector = ROOT::Math::PtEtaPhiMVector;
 using ROOT::Math::XYZTVector;
@@ -17,7 +11,7 @@ double query6(const char * f);
 double query7(const char * f);
 double query8(const char * f);
 
-void jitted(int ncores, const char * f, int query){
+void jitted(int ncores, const char * f, int query, int op){
     if ( ncores > 1 ) { 
         ROOT::EnableImplicitMT(ncores); 
     }
@@ -57,12 +51,12 @@ void jitted(int ncores, const char * f, int query){
 
     StopWatch.Stop();
     std::ofstream outf;
-    outf.open("reports/LOG7.txt", std::ios::app);
+    outf.open("reports/LOG9.txt", std::ios::app);
     int nf = 1;
     if (((std::string)f).find('*') != std::string::npos) nf = 10;
     outf << "JIT:: Q:" << query << ", C:" << ncores
          << ", T:" <<  StopWatch.RealTime()
-         <<", F:" << nf << std::endl;
+         <<", F:" << nf << ", O:"<< op << std::endl;
 
     return;
 }

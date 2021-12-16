@@ -25,7 +25,7 @@ then
 	perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf ./cmpl ${cores} "${FILEN}" ${query}
 	rm cmpl
 else
-	EXTRA_CLING_ARGS="-O${o}" perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf root -l -b -q "jitted.C(${cores},\"${FILEN}\",${query})"
+	EXTRA_CLING_ARGS="-O${optimiz}" perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf root -l -b -q "jitted.C(${cores},\"${FILEN}\",${query},${optimiz})"
 fi
 
 perf script -i "../../OPENreportsD/${query}/${namerep}.data" | ~/FlameGraph/stackcollapse-perf.pl >  ~/perf_reps/out.perf-folded
