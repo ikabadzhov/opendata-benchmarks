@@ -1,8 +1,9 @@
 #!/bin/sh
 
-while getopts n:j:q:f:c: flag
+while getopts n:j:q:f:c:o: flag
 do
 	case "${flag}" in
+		o) optimiz=${OPTARG};;
 		n) namerep=${OPTARG};;  # name of the outputreport
 		j) jitted=${OPTARG};;   # 0 -> compiled, 1 -> jitted
 		q) query=${OPTARG};;    # query ind. from 1 to 8
@@ -20,11 +21,11 @@ fi
 
 if [ "${jitted}" -eq "0" ];
 then
-	g++ -O1 $(root-config --cflags --libs) AQ7.cxx -o cmpl
+	g++ -O1 $(root-config --cflags --libs) compiled.cxx -o cmpl
 	perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf ./cmpl ${cores} "${FILEN}" ${query}
 	rm cmpl
 else
-	EXTRA_CLING_ARGS="-O1" perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf root -l -b -q "jitted.C+(${cores},\"${FILEN}\",${query})"
+	EXTRA_CLING_ARGS="-O${o}" perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf root -l -b -q "jitted.C(${cores},\"${FILEN}\",${query})"
 fi
 
 perf script -i "../../OPENreportsD/${query}/${namerep}.data" | ~/FlameGraph/stackcollapse-perf.pl >  ~/perf_reps/out.perf-folded
