@@ -1,3 +1,9 @@
+#include "ROOT/RDataFrame.hxx"
+#include "ROOT/RVec.hxx"
+#include "Math/Vector4D.h"
+#include "TStopwatch.h"
+#include <fstream>
+
 template <typename T> using Vec = const ROOT::RVec<T>&;
 using FourVector = ROOT::Math::PtEtaPhiMVector;
 using ROOT::Math::XYZTVector;
