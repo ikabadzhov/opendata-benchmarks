@@ -1,0 +1,53 @@
+  520  for i in {1..8} ; do sh Perf.sh -n prealloc_compiled10x48c -j 0 -q $i -f 10 -c 48 ; done
+  521  for i in {1..8} ; do sh Perf.sh -n prealloc_compiled1x48c -j 0 -q $i -f 1 -c 48 ; done
+  614  sh Perf.sh -n cmp_tstx48c -j 0 -q 6 -f 10 -c 48
+  617  sh Perf.sh -n cmp_tstx48c -j 0 -q 6 -f 10 -c 48
+  618  sh Perf.sh -n jit_tstx48c -j 1 -q 6 -f 10 -c 48
+  619  sh Perf.sh -n jit_tstx48c -j 0 -q 6 -f 10 -c 48
+  621  sh Perf.sh -n jit_tstx48c -j 0 -q 6 -f 10 -c 48
+  624  sh Perf.sh -n jit_tstx48c -j 0 -q 6 -f 10 -c 48
+  625  sh Perf.sh -n jit_tstx48c -j 1 -q 6 -f 10 -c 48
+  987  sh Perf.sh -n JO3 -j 1 -q 7 -f 1 -c 48
+ 1002  history | grep Perf
+ 1003  vim Perf.sh
+ 1004  history | grep Perf
+[ikabadzh@ntpl-perf01 tasks]$  sh Perf.sh -n J48cO2 -j 1 -q 7 -f 1 -c 48
+
+Processing jitted.C(48,"/data/ssdext4/ikabadzh/ODB/Run2012B_SingleMu.root",7)...
+[ perf record: Woken up 2766 times to write data ]
+[ perf record: Captured and wrote 706.153 MB ../../OPENreportsD/7/J48cO2.data (87642 samples) ]
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+        LANGUAGE = (unset),
+        LC_ALL = (unset),
+        LC_MEASUREMENT = "de_DE.UTF-8",
+        LC_PAPER = "de_DE.UTF-8",
+        LC_MONETARY = "de_DE.UTF-8",
+        LC_NAME = "de_DE.UTF-8",
+        LC_CTYPE = "en_US.UTF",
+        LC_ADDRESS = "de_DE.UTF-8",
+        LC_NUMERIC = "de_DE.UTF-8",
+        LC_TELEPHONE = "de_DE.UTF-8",
+        LC_IDENTIFICATION = "de_DE.UTF-8",
+        LC_TIME = "de_DE.UTF-8",
+        LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+        LANGUAGE = (unset),
+        LC_ALL = (unset),
+        LC_MEASUREMENT = "de_DE.UTF-8",
+        LC_PAPER = "de_DE.UTF-8",
+        LC_MONETARY = "de_DE.UTF-8",
+        LC_NAME = "de_DE.UTF-8",
+        LC_CTYPE = "en_US.UTF",
+        LC_ADDRESS = "de_DE.UTF-8",
+        LC_NUMERIC = "de_DE.UTF-8",
+        LC_TELEPHONE = "de_DE.UTF-8",
+        LC_IDENTIFICATION = "de_DE.UTF-8",
+        LC_TIME = "de_DE.UTF-8",
+        LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+[ikabadzh@ntpl-perf01 tasks]$

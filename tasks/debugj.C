@@ -204,7 +204,7 @@ double query7(const char * f) {
                .Filter("Sum(goodJet) > 0")
                .Define("goodJet_sumPt", "Sum(Jet_pt[goodJet])")
                .Histo1D({"", ";Jet p_{T} sum (GeV);N_{Events}", 100, 15, 200}, "goodJet_sumPt");
-
+    std::cout << h->Integral();
     return h->Integral();
 }
 
