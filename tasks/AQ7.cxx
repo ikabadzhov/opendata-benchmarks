@@ -33,15 +33,15 @@ double query3(const char * filename) {
 
 double query4(const char * filename) {
     ROOT::RDataFrame df("Events", filename);
-/*
-    auto filter = [](const ROOT::RVec<float> & pt, const ROOT::RVec<float> & eta) {
-            return Sum(pt > 40) > 1;
-    };
-    auto h = df.Filter(filter, {"Jet_pt", "Jet_eta"}, "More than one jet with pt > 40")
-               .Histo1D<float>({"", ";MET (GeV);N_{Events}", 100, 0, 200}, "MET_pt");
-*/
-    auto h = df.Filter("Sum(Jet_pt > 40) > 1", "More than one jet with pt > 40")
-               .Histo1D({"", ";MET (GeV);N_{Events}", 100, 0, 200}, "MET_pt");
+
+    //auto filter = [&](const ROOT::RVec<float> & pt, const ROOT::RVec<float> & eta) {
+    //        return Sum(pt > 40) > 1;};
+    auto h = df.Filter([&] (const ROOT::RVec<float> &pt, const ROOT::RVec<float> &eta)  {
+            return Sum(pt > 40) > 1;}, {"Jet_pt", "Jet_eta"}, "More than one jet with pt > 40")
+    	       .Histo1D<float>({"", ";MET (GeV);N_{Events}", 100, 0, 200}, "MET_pt");
+
+    //auto h = df.Filter("Sum(Jet_pt > 40) > 1", "More than one jet with pt > 40")
+    //           .Histo1D<float>({"", ";MET (GeV);N_{Events}", 100, 0, 200}, "MET_pt");
     return h->Integral();
 }
 
