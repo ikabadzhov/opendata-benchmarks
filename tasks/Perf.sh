@@ -21,7 +21,7 @@ fi
 
 if [ "${jitted}" -eq "0" ];
 then
-	g++ -O1 $(root-config --cflags --libs) compiled.cxx -o cmpl
+	g++ -O3 $(root-config --cflags --libs) compiled.cxx -o cmpl
 	perf record -o "../../OPENreportsD/${query}/${namerep}.data" -F 99 --call-graph dwarf ./cmpl ${cores} "${FILEN}" ${query}
 	rm cmpl
 else

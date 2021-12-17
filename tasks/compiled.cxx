@@ -5,6 +5,8 @@
 #include "Math/Vector4D.h"
 #include "TStopwatch.h"
 #include <fstream>
+#include "ROOT/RLogger.hxx"
+
 
 double query1(const char * filename) {
     ROOT::RDataFrame df("Events", filename);
@@ -241,6 +243,10 @@ double query8(const char * filename) {
 }
 
 int main(int argc, const char ** argv) {
+
+auto verbosity = ROOT::Experimental::RLogScopedVerbosity(ROOT::Detail::RDF::RDFLogChannel(), ROOT::Experimental::ELogLevel::kInfo);
+
+
     if ( argc != 4 ) {
       std::cout << "Usage: PROG ncores filename query" << std::endl;
       return 1;
