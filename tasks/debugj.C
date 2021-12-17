@@ -90,6 +90,7 @@ double query4(const char * f) {
     auto h = df.Filter("Sum(Jet_pt > 40) > 1", "More than one jet with pt > 40")
                .Histo1D({"", ";MET (GeV);N_{Events}", 100, 0, 200}, "MET_pt");
     
+    std::cout << h->Integral();
     return h->Integral();
 }
 

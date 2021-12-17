@@ -21,7 +21,7 @@ fi
 
 if [ "${jitted}" -eq "0" ];
 then
-	clang++ -O3 $(root-config --cflags --libs) compiled.cxx -o cmpl
+	clang++ -O3 $(root-config --cflags --libs) AQ7.cxx -o cmpl
 	./cmpl ${cores} "${FILEN}" ${query}
 	rm cmpl
 else
