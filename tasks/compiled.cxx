@@ -5,7 +5,7 @@
 #include "Math/Vector4D.h"
 #include "TStopwatch.h"
 #include <fstream>
-#include "ROOT/RLogger.hxx"
+//#include "ROOT/RLogger.hxx"
 
 
 double query1(const char * filename) {
@@ -33,10 +33,10 @@ double query3(const char * filename) {
 
 double query4(const char * filename) {
     ROOT::RDataFrame df("Events", filename);
-    auto filter = [](const ROOT::RVec<float> & pt, const ROOT::RVec<float> & eta) {
+    auto filter = [](const ROOT::RVec<float> & pt) {
             return Sum(pt > 40) > 1;
     };
-    auto h = df.Filter(filter, {"Jet_pt", "Jet_eta"}, "More than one jet with pt > 40")
+    auto h = df.Filter(filter, {"Jet_pt"}, "More than one jet with pt > 40")
                .Histo1D<float>({"", ";MET (GeV);N_{Events}", 100, 0, 200}, "MET_pt");
 
     return h->Integral();
@@ -244,7 +244,7 @@ double query8(const char * filename) {
 
 int main(int argc, const char ** argv) {
 
-auto verbosity = ROOT::Experimental::RLogScopedVerbosity(ROOT::Detail::RDF::RDFLogChannel(), ROOT::Experimental::ELogLevel::kInfo);
+//auto verbosity = ROOT::Experimental::RLogScopedVerbosity(ROOT::Detail::RDF::RDFLogChannel(), ROOT::Experimental::ELogLevel::kInfo);
 
 
     if ( argc != 4 ) {
@@ -294,7 +294,7 @@ auto verbosity = ROOT::Experimental::RLogScopedVerbosity(ROOT::Detail::RDF::RDFL
 
     StopWatch.Stop();
     std::ofstream outf;
-    outf.open("reports/LOG4.txt", std::ios::app);
+    outf.open("reports/LOG6.txt", std::ios::app);
     int nf = 1;
     if (((std::string)filename).find('*') != std::string::npos) nf = 100;
     outf << "CMP:: Q:" << query << ", C:" << ncores

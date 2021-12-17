@@ -36,12 +36,13 @@ double query4(const char * filename) {
 
     //auto filter = [&](const ROOT::RVec<float> & pt, const ROOT::RVec<float> & eta) {
     //        return Sum(pt > 40) > 1;};
-    auto h = df.Filter([&] (const ROOT::RVec<float> &pt, const ROOT::RVec<float> &eta)  {
-            return Sum(pt > 40) > 1;}, {"Jet_pt", "Jet_eta"}, "More than one jet with pt > 40")
+    auto h = df.Filter([] (const ROOT::RVec<float> &pt)  {
+            return Sum(pt > 40) > 1;}, {"Jet_pt"}, "More than one jet with pt > 40")
     	       .Histo1D<float>({"", ";MET (GeV);N_{Events}", 100, 0, 200}, "MET_pt");
 
     //auto h = df.Filter("Sum(Jet_pt > 40) > 1", "More than one jet with pt > 40")
-    //           .Histo1D<float>({"", ";MET (GeV);N_{Events}", 100, 0, 200}, "MET_pt");
+    //           .Histo1D({"", ";MET (GeV);N_{Events}", 100, 0, 200}, "MET_pt");
+    std::cout << h->Integral();
     return h->Integral();
 }
 

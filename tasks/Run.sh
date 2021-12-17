@@ -22,7 +22,7 @@ fi
 if [ "${jitted}" -eq "0" ];
 then
 	#EXTRA_CLING_ARGS="-O${optimiz}"
-	g++ -O3 $(root-config --cflags --libs) AQ7.cxx -o cmpl
+	g++ -O3 $(root-config --cflags --libs) compiled.cxx -o cmpl
 	#EXTRA_CLING_ARGS="-O${optimiz}"
 	./cmpl ${cores} "${FILEN}" ${query}
 	rm cmpl
