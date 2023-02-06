@@ -5,27 +5,25 @@
 
 template <typename T> using Vec = const ROOT::RVec<T>&;
 using FourVector = ROOT::Math::PtEtaPhiMVector;
+constexpr static unsigned int PLACEHOLDER_VALUE = 99999;
 
 unsigned int additional_lepton_idx(Vec<float> pt, Vec<float> eta, Vec<float> phi, Vec<float> mass, Vec<int> charge, Vec<int> flavour)
 {
     const auto c = Combinations(pt, 2);
-    unsigned int lep_idx = -999;
-    float best_mass = 99999;
-    int best_i1 = -1;
-    int best_i2 = -1;
+    float best_mass = PLACEHOLDER_VALUE;
+    unsigned int best_i1 = PLACEHOLDER_VALUE;
+    unsigned int best_i2 = PLACEHOLDER_VALUE;
     const auto z_mass = 91.2;
     const auto make_p4 = [&](std::size_t idx) {
         return ROOT::Math::PtEtaPhiMVector(pt[idx], eta[idx], phi[idx], mass[idx]);
     };
 
-    for (auto i = 0; i < c[0].size(); i++) {
+    for (auto i = 0u; i < c[0].size(); i++) {
         const auto i1 = c[0][i];
         const auto i2 = c[1][i];
         if (charge[i1] == charge[i2]) continue;
         if (flavour[i1] != flavour[i2]) continue;
-        const auto p1 = make_p4(i1);
-        const auto p2 = make_p4(i2);
-        const auto tmp_mass = (p1 + p2).mass();
+        const auto tmp_mass = (make_p4(i1) + make_p4(i2)).mass();
         if (std::abs(tmp_mass - z_mass) < std::abs(best_mass - z_mass)) {
             best_mass = tmp_mass;
             best_i1 = i1;
@@ -33,10 +31,11 @@ unsigned int additional_lepton_idx(Vec<float> pt, Vec<float> eta, Vec<float> phi
         }
     }
 
-    if (best_i1 == -1) return lep_idx;
+    if (best_i1 == PLACEHOLDER_VALUE) return PLACEHOLDER_VALUE;
 
     float max_pt = -999;
-    for (auto i = 0; i < pt.size(); i++) {
+    unsigned int lep_idx = PLACEHOLDER_VALUE;
+    for (auto i = 0u; i < pt.size(); i++) {
         if (i != best_i1 && i != best_i2 && pt[i] > max_pt) {
             max_pt = pt[i];
             lep_idx = i;
@@ -68,7 +67,7 @@ void rdataframe() {
                        {"nMuon", "nElectron"})
                .Define("AdditionalLepton_idx", additional_lepton_idx,
                        {"Lepton_pt", "Lepton_eta", "Lepton_phi", "Lepton_mass", "Lepton_charge", "Lepton_flavour"})
-               .Filter([](unsigned int idx) { return idx != -999; }, {"AdditionalLepton_idx"}, "No valid lepton pair found.")
+               .Filter([](unsigned int idx) { return idx != PLACEHOLDER_VALUE; }, {"AdditionalLepton_idx"}, "No valid lepton pair found.")
                .Define("TransverseMass", transverseMass,
                        {"Lepton_pt", "Lepton_phi", "MET_pt", "MET_phi", "AdditionalLepton_idx"})
 
